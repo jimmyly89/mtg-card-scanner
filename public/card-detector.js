@@ -205,9 +205,8 @@ class CardDetector {
     
     this.updateDebugPanel();
     
-    const video = document.getElementById('videoElement');
-    if (video && this.debugMode) {
-      this.drawDebugView(video, gray, null, null, result.bestContour, width, height);
+    if (this.debugMode) {
+      this.drawDebugView(null, gray, null, null, result.bestContour, width, height);
     }
     
     return result.bestContour;
@@ -881,25 +880,41 @@ class CardDetector {
       this.debugCanvas.style.position = 'absolute';
       this.debugCanvas.style.top = '0';
       this.debugCanvas.style.left = '0';
+      this.debugCanvas.style.width = '100%';
+      this.debugCanvas.style.height = '100%';
       this.debugCanvas.style.pointerEvents = 'none';
-      this.debugCanvas.style.zIndex = '9';
-      this.debugCanvas.style.opacity = '0.7';
+      this.debugCanvas.style.zIndex = '20';
+      this.debugCanvas.style.opacity = '0.8';
+      this.debugCanvas.style.display = 'block';
       
-      const container = videoElement.parentElement;
+      // Attach to the video's parent container (cameraWrap)
+      const v = document.getElementById('video');
+      const container = v ? v.parentElement : null;
       if (container) {
         container.appendChild(this.debugCanvas);
       }
     }
     
-    const video = document.getElementById('videoElement');
-    if (video) {
-      this.debugCanvas.width = video.videoWidth || width;
-      this.debugCanvas.height = video.videoHeight || height;
-      this.debugCanvas.style.width = video.offsetWidth + 'px';
-      this.debugCanvas.style.height = video.offsetHeight + 'px';
+    // Always ensure it's visible when debugMode is on
+    this.debugCanvas.style.display = 'block';
+    this.debugCanvas.style.opacity = '0.8';
+    
+    const videoEl = document.getElementById('video');
+    if (videoEl && videoEl.videoWidth) {
+      this.debugCanvas.width = videoEl.videoWidth;
+      this.debugCanvas.height = videoEl.videoHeight;
+      const container = videoEl.parentElement;
+      if (container) {
+        this.debugCanvas.style.width = container.offsetWidth + 'px';
+        this.debugCanvas.style.height = container.offsetHeight + 'px';
+      }
     } else {
       this.debugCanvas.width = width;
       this.debugCanvas.height = height;
+      if (videoEl && videoEl.parentElement) {
+        this.debugCanvas.style.width = videoEl.parentElement.offsetWidth + 'px';
+        this.debugCanvas.style.height = videoEl.parentElement.offsetHeight + 'px';
+      }
     }
     
     const ctx = this.debugCanvas.getContext('2d');
@@ -946,6 +961,28 @@ class CardDetector {
       ctx.strokeStyle = '#FFFF00';
       ctx.lineWidth = 2;
       ctx.strokeRect(minX * scaleX, minY * scaleY, (maxX - minX) * scaleX, (maxY - minY) * scaleY);
+      
+      // ═══ TITLE REGION OVERLAY ═══
+      // Draw the 10% title crop zone inside the detected card quad
+      // Matches ocr-processor.js: titleTopFrac=0.018, titleHeightFrac=0.10, titleLeftFrac=0.05, titleWidthFrac=0.70
+      // The bestContour quad defines the card boundary. Project the title region onto it.
+      const cardW = maxX - minX;
+      const cardH = maxY - minY;
+      const titleTop = minY + cardH * 0.018;
+      const titleLeft = minX + cardW * 0.05;
+      const titleH = cardH * 0.10;
+      const titleW = cardW * 0.70;
+      
+      ctx.strokeStyle = '#00FF00';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(titleLeft * scaleX, titleTop * scaleY, titleW * scaleX, titleH * scaleY);
+      ctx.setLineDash([]);
+      
+      // Label
+      ctx.font = 'bold 14px monospace';
+      ctx.fillStyle = '#00FF00';
+      ctx.fillText('📝 Title crop (10%)', titleLeft * scaleX, titleTop * scaleY - 6);
     }
     
     ctx.font = '12px monospace';

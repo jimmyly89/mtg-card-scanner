@@ -8,6 +8,8 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
+const db = require('./db');
+const inventoryApi = require('./routes/inventory-api');
 
 const app = express();
 const server = http.createServer(app);
@@ -100,7 +102,11 @@ if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── Inventory API routes ──
+app.use('/api/inventory', inventoryApi);
 
 const sessions = new Map();
 let sessionCounter = 0;
@@ -181,10 +187,101 @@ io.on('connection', (socket) => {
         io.to(sessionId).emit('scanning-started');
     });
 
-    socket.on('finish-scanning', (data) => {
-        const { sessionId } = data;
+    socket.on('finish-scanning', async (data) => {
+        const { sessionId, sessionName } = data;
         const session = getOrCreateSession(sessionId);
         session.isScanning = false;
+        
+        let saveSuccess = false;
+        let cardsInserted = 0;
+        
+        // Auto-save to MariaDB inventory
+        try {
+            const cardsToSave = session.inventory.length > 0 ? session.inventory : session.cards;
+            if (cardsToSave.length > 0) {
+                const setCode = session.boxInfo?.setLock || '';
+                const setCodeLower = setCode.toLowerCase();
+                
+                const payload = {
+                    session_id: sessionId,
+                    session_name: sessionName || sessionId || '',
+                    set_code: setCodeLower,
+                    set_name: setCode || '',
+                    cost: session.boxInfo?.cost || 0,
+                    cards: cardsToSave.map(c => ({
+                        card_name: c.name || c.card_name || 'Unknown',
+                        set_name: c.set_name || '',
+                        set_code: c.set_code || setCodeLower,
+                        scryfall_id: c.scryfall_id || c.id || '',
+                        foil: c.foil ? 1 : 0,
+                        borderless: c.borderless ? 1 : 0,
+                        price: c.price || c.priceUsd || 0,
+                        condition: c.condition || 'NM'
+                    }))
+                };
+                
+                // Fire and log result
+                const http = require('http');
+                const body = JSON.stringify(payload);
+                const req = http.request({
+                    hostname: 'localhost',
+                    port: PORT,
+                    path: '/api/inventory/save-session',
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+                }, (resp) => {
+                    let data = '';
+                    resp.on('data', chunk => data += chunk);
+                    resp.on('end', () => {
+                        try {
+                            const result = JSON.parse(data);
+                            if (result.success) {
+                                saveSuccess = true;
+                                cardsInserted = result.cards_inserted || 0;
+                                console.log(`Auto-saved session ${sessionId}: ${cardsInserted} cards`);
+                            }
+                            // Emit session-finished with result
+                            io.to(sessionId).emit('session-finished', {
+                                success: result.success,
+                                cards_inserted: result.cards_inserted || 0,
+                                error: result.error || null
+                            });
+                        } catch(e) {
+                            io.to(sessionId).emit('session-finished', {
+                                success: true,
+                                cards_inserted: cardsToSave.length,
+                                error: null
+                            });
+                        }
+                    });
+                });
+                req.on('error', (e) => {
+                    console.error('Auto-save error:', e.message);
+                    io.to(sessionId).emit('session-finished', {
+                        success: true,
+                        cards_inserted: 0,
+                        error: e.message
+                    });
+                });
+                req.write(body);
+                req.end();
+            } else {
+                // No cards to save — still emit success
+                io.to(sessionId).emit('session-finished', {
+                    success: true,
+                    cards_inserted: 0,
+                    error: null
+                });
+            }
+        } catch (e) {
+            console.error('Auto-save failed:', e.message);
+            io.to(sessionId).emit('session-finished', {
+                success: false,
+                cards_inserted: 0,
+                error: e.message
+            });
+        }
+        
         io.to(sessionId).emit('scanning-finished');
     });
 
@@ -287,7 +384,39 @@ io.on('connection', (socket) => {
     });
 });
 
-// ── LIST ACTIVE SESSIONS ─────────────────────────────────────────────────────
+// ── REST API: Sessions (for frontend Setup panel) ────────────────────────────
+// GET /api/sessions - list active sessions
+app.get('/api/sessions', (req, res) => {
+    const active = [];
+    for (const [id, session] of sessions) {
+        if (session.scanners.length > 0 || session.displays.length > 0) {
+            active.push({
+                id: session.id,
+                scanners: session.scanners.length,
+                displays: session.displays.length,
+                cards: session.cards.length,
+                hasBox: !!session.boxInfo
+            });
+        }
+    }
+    res.json({ sessions: active });
+});
+
+// POST /api/sessions - create a new session
+app.post('/api/sessions', (req, res) => {
+    mtgSeqCounter++;
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let code = '';
+    for (let i = 0; i < 4; i++) {
+        code += letters.charAt(Math.floor(Math.random() * letters.length));
+    }
+    const newSessionId = `MTG${code}-${mtgSeqCounter}`;
+    getOrCreateSession(newSessionId);
+    console.log('Generated new session via REST:', newSessionId);
+    res.json({ id: newSessionId });
+});
+
+// ── LIST ACTIVE SESSIONS (legacy) ──────────────────────────────────────────────
 app.get('/api/mtg/sessions', (req, res) => {
     const active = [];
     for (const [id, session] of sessions) {
@@ -380,6 +509,44 @@ app.get('/api/mtg/search-local', (req, res) => {
     } catch (err) {
         console.error('DB search error:', err);
         res.json({ matches: [], match: null, error: err.message });
+    }
+});
+
+// ── SET AUTOCOMPLETE SEARCH (excludes token sets) ──
+app.get('/api/mtg/sets-search', (req, res) => {
+    const query = (req.query.q || '').trim().toLowerCase();
+    const dbPath = path.join(__dirname, 'data', 'mtg_cards.db');
+    if (!fs.existsSync(dbPath)) {
+        return res.json({ sets: [], db_exists: false });
+    }
+    let sqlite3;
+    try {
+        sqlite3 = require('sqlite3');
+    } catch (e) {
+        return res.json({ sets: [], error: 'sqlite3 not available' });
+    }
+    try {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+        const likePat = `%${query}%`;
+        db.all(`
+            SELECT code, name FROM sets_info
+            WHERE (LOWER(name) LIKE ? OR LOWER(code) LIKE ?)
+              AND LOWER(name) NOT LIKE '%token%'
+              AND LOWER(code) NOT LIKE '%tok%'
+              AND code NOT IN ('TUST','THP1','THP2','THP3','THP4','THP5')
+            ORDER BY
+                CASE WHEN LOWER(code) = ? THEN 0
+                     WHEN LOWER(name) = ? THEN 1
+                     ELSE 2 END,
+                release_date DESC
+            LIMIT 20
+        `, [likePat, likePat, query, query], (err, rows) => {
+            db.close();
+            if (err) return res.json({ sets: [], error: err.message });
+            res.json({ sets: rows });
+        });
+    } catch (err) {
+        res.json({ sets: [], error: err.message });
     }
 });
 
@@ -540,6 +707,45 @@ app.get('/api/mtg/card-versions', (req, res) => {
     } catch (err) {
         console.error('Card versions search error:', err);
         res.json({ versions: [], error: err.message });
+    }
+});
+
+// POST /api/mtg/scan-neural - Neural card scanning using ONNX models (Cornelius + Milo)
+// This uses a trained neural network for better corner detection and embedding-based matching.
+app.post('/api/mtg/scan-neural', upload.single('image'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No image uploaded' });
+    }
+
+    const imagePath = req.file.path;
+    let tempFiles = [imagePath];
+
+    try {
+        console.log(`Neural scan: ${req.file.originalname || 'unknown'}`);
+
+        const scanResult = await runPythonScript('scripts/neural_scanner.py', [imagePath]);
+
+        if (scanResult.error) {
+            return res.status(500).json({ 
+                error: 'Neural scan failed', 
+                details: scanResult.error 
+            });
+        }
+
+        res.json(scanResult);
+
+    } catch (error) {
+        console.error('Neural scan error:', error);
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message 
+        });
+    } finally {
+        tempFiles.forEach(file => {
+            if (fs.existsSync(file)) {
+                try { fs.unlinkSync(file); } catch (e) { /* ignore */ }
+            }
+        });
     }
 });
 
@@ -886,6 +1092,14 @@ function formatDuration(ms) {
 }
     
 const PORT = process.env.PORT || 3000;
+
+// Initialize database tables (non-blocking)
+db.initDatabase().then(() => {
+    console.log('MariaDB inventory database ready');
+}).catch(err => {
+    console.error('MariaDB initialization failed (will retry on first request):', err.message);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`MTG Card Scanner server running on http://localhost:${PORT}`);
     console.log('Prices displayed in AUD (USD * 1.55)');

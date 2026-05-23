@@ -725,7 +725,7 @@ function selectSetFromAutocomplete(code) { const inp = document.getElementById('
 function getCurrentSetLock() { const inp = document.getElementById('setCodeInput'); return inp ? (inp.dataset.code || inp.value.trim()).toLowerCase() : ''; }
 
 // ── DB Status polling ──
-function rebuildDatabase() { fetch('/api/mtg/build', { method: 'POST' }).then(r=>r.json()).then(d=>{ showToast('Database refresh started', 'info'); pollBuildStatus(); }).catch(()=> showToast('Failed to start rebuild', 'error')); }
+function rebuildDatabase() { fetch('/api/mtg/build-database', { method: 'POST' }).then(r=>r.json()).then(d=>{ showToast('Database refresh started', 'info'); pollBuildStatus(); }).catch(()=> showToast('Failed to start rebuild', 'error')); }
 function pollBuildStatus() { fetch('/api/mtg/build-status').then(r=>r.json()).then(d=>{ updateDBBadge(d); if (d.status==='building') setTimeout(pollBuildStatus, 3000); }).catch(()=>{}); }
 function updateDBBadge(d) {
   const wrap = document.getElementById('dbTooltipWrap'); const badge = document.getElementById('dbBuildStatus'); const tip = document.getElementById('dbBuildTooltip');

@@ -130,7 +130,8 @@
 
         .toast-container { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); z-index: 2000; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
         .toast { background: var(--bg-surface); backdrop-filter: blur(24px); color: var(--text-primary); padding: 10px 20px; border-radius: var(--radius); font-size: 12px; font-weight: 500; animation: slideDown 0.25s ease-out; white-space: nowrap; border: 1px solid var(--border); pointer-events: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-        .toast.success { background: rgba(34,197,94,0.85); border-color: var(--green); }
+    .toast.success { background: rgba(34,197,94,0.85); border-color: var(--green); }
+    .toast.info { background: rgba(59,130,246,0.85); border-color: var(--blue); }
         .toast.error { background: rgba(239,68,68,0.85); border-color: var(--red); }
         .toast.warning { background: rgba(245,158,11,0.85); border-color: var(--orange); }
         @keyframes slideDown { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
@@ -183,7 +184,7 @@
         </div>
         <div class="ui-card">
             <div class="data-table-wrap"><table class="data-table" id="sessionsTable"><thead><tr>
-                <th>Session ID</th><th>Set Code</th><th>Set Name</th><th>Date</th><th>Cost</th><th>Value</th><th>Net</th><th>Cards</th>
+                <th>Session ID</th><th>Set Code</th><th>Set Name</th><th>Date</th><th>Cost</th><th>Value</th><th>Net</th><th>Cards</th><th style="width:40px">Edit</th>
             </tr></thead><tbody id="sessionsBody"></tbody></table></div>
             <div style="margin-top:8px;font-size:11px;color:var(--text-muted);text-align:center" id="sessionsCount"></div>
         </div>
@@ -199,6 +200,9 @@
                 </div>
                 <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer">
                     <input type="checkbox" id="activeOnlyCheck" checked onchange="loadCards()"> Active only
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer">
+                    <input type="checkbox" id="showImagesCheck" checked onchange="toggleCardImages()"> Show Images
                 </label>
                 <input type="text" id="setFilter" placeholder="Set code..." style="width:100px" oninput="loadCards()">
                 <div class="col-selector">
@@ -226,8 +230,35 @@
                 <button class="btn btn-primary btn-sm" onclick="showNewOrderModal()">+ New Order</button>
             </div>
             <div class="data-table-wrap"><table class="data-table" id="ordersTable"><thead><tr>
-                <th>Order ID</th><th>Value</th><th>Date</th><th>Cards</th>
+                <th>Order #</th><th>External ID</th><th>Value</th><th>Cost</th><th>Net</th><th>Date</th><th>Cards</th>
             </tr></thead><tbody id="ordersBody"></tbody></table></div>
+        </div>
+    </div>
+</div>
+
+<!-- Session Edit Modal -->
+<div class="modal-overlay" id="sessionEditModal">
+    <div class="modal-content" style="max-width:460px">
+        <div class="modal-title">Edit Session</div>
+        <div class="modal-body">
+            <div class="form-group" style="margin-bottom:8px"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Session ID</label><input type="text" id="editSessionId" readonly></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Session Name</label><input type="text" id="editSessionName" placeholder="Session name"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Set Code</label><input type="text" id="editSetCode" placeholder="Set code"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Set Name</label><input type="text" id="editSetName" placeholder="Set name"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Date</label><input type="date" id="editDateScanned"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Cost ($)</label><input type="number" id="editCost" step="0.01" min="0"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Value ($)</label><input type="number" id="editValue" step="0.01" min="0"></div>
+                <div class="form-group" style="margin-bottom:0"><label style="font-size:11px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Net ($)</label><input type="number" id="editNet" step="0.01"></div>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-ghost" onclick="closeModal('sessionEditModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="saveSessionEdit()">Save Changes</button>
         </div>
     </div>
 </div>
@@ -249,11 +280,15 @@
 
 <!-- New Order Modal -->
 <div class="modal-overlay" id="newOrderModal">
-    <div class="modal-content">
+    <div class="modal-content" style="max-width:400px">
         <div class="modal-title">Create New Order</div>
         <div class="modal-body">
-            <input type="text" id="newOrderIdInput" placeholder="Order ID..." style="margin-bottom:8px" onkeydown="if(event.key==='Enter')createOrder()">
-            <input type="number" id="newOrderValueInput" step="0.01" placeholder="Order value (optional)..." onkeydown="if(event.key==='Enter')createOrder()">
+            <input type="text" id="newOrderExternalId" placeholder="External ID (e.g. eBay-12345)..." style="margin-bottom:8px" onkeydown="if(event.key==='Enter')createOrder()">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <input type="number" id="newOrderValueInput" step="0.01" placeholder="Value ($)..." onkeydown="if(event.key==='Enter')createOrder()">
+                <input type="number" id="newOrderCostInput" step="0.01" placeholder="Cost ($)..." onkeydown="if(event.key==='Enter')createOrder()">
+            </div>
+            <input type="date" id="newOrderDateInput" onkeydown="if(event.key==='Enter')createOrder()">
         </div>
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="closeModal('newOrderModal')">Cancel</button>
@@ -315,6 +350,19 @@ function showToast(msg, type) {
 // ── Navigation ──
 function toggleNav() { document.getElementById('hamburgerPopup').classList.toggle('open'); }
 
+// ── Image Toggle ──
+function toggleCardImages() {
+    const show = document.getElementById('showImagesCheck').checked;
+    let cols = getVisibleColumns();
+    if (show) {
+        if (!cols.includes('image')) cols.push('image');
+    } else {
+        cols = cols.filter(c => c !== 'image');
+    }
+    setVisibleColumns(cols);
+    renderCardsTable();
+}
+
 function switchTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.textContent.includes({sessions:'📊',cards:'🃏',orders:'📦'}[tab])));
@@ -336,14 +384,15 @@ async function loadSessions() {
         // Build table
         const tbody = document.getElementById('sessionsBody');
         tbody.innerHTML = sessionsData.map(s => `<tr>
-            <td class="editable" onclick="editSessionField('${s.session_id}','session_id',this)">${s.session_id}</td>
-            <td class="editable" onclick="editSessionField('${s.session_id}','set_code',this)">${s.set_code || ''}</td>
-            <td class="editable" onclick="editSessionField('${s.session_id}','set_name',this)">${s.set_name || ''}</td>
-            <td class="editable" onclick="editSessionField('${s.session_id}','date_scanned',this)">${s.date_scanned ? new Date(s.date_scanned).toLocaleDateString() : ''}</td>
-            <td class="editable" onclick="editSessionField('${s.session_id}','cost',this)">$${parseFloat(s.cost || 0).toFixed(2)}</td>
+            <td>${s.session_id}</td>
+            <td>${s.set_code || ''}</td>
+            <td>${s.set_name || ''}</td>
+            <td>${s.date_scanned ? new Date(s.date_scanned).toLocaleDateString() : ''}</td>
+            <td>$${parseFloat(s.cost || 0).toFixed(2)}</td>
             <td>$${parseFloat(s.value || 0).toFixed(2)}</td>
             <td class="${s.net >= 0 ? 'val pos' : 'val neg'}">$${parseFloat(s.net || 0).toFixed(2)}</td>
             <td>${s.card_count || 0}</td>
+            <td><button class="btn btn-ghost btn-sm" onclick="openSessionEditModal('${s.session_id}')" style="font-size:14px;padding:2px 8px">✏️</button></td>
         </tr>`).join('');
 
         // Totals row
@@ -356,6 +405,7 @@ async function loadSessions() {
                 <td><strong>$${t.total_value.toFixed(2)}</strong></td>
                 <td class="${t.total_net >= 0 ? 'val pos' : 'val neg'}"><strong>$${t.total_net.toFixed(2)}</strong></td>
                 <td><strong>${t.total_cards}</strong></td>
+                <td></td>
             </tr>`;
         }
 
@@ -371,6 +421,65 @@ async function loadSessions() {
     } catch (e) {
         console.error('Failed to load sessions:', e);
         showToast('Failed to load sessions', 'error');
+    }
+}
+
+// ── Session Edit Modal ──
+function openSessionEditModal(sessionId) {
+    const session = sessionsData.find(s => s.session_id === sessionId);
+    if (!session) { showToast('Session not found', 'error'); return; }
+    
+    document.getElementById('editSessionId').value = session.session_id;
+    document.getElementById('editSessionName').value = session.session_name || '';
+    document.getElementById('editSetCode').value = session.set_code || '';
+    document.getElementById('editSetName').value = session.set_name || '';
+    // Format date for input type="date"
+    if (session.date_scanned) {
+        const d = new Date(session.date_scanned);
+        document.getElementById('editDateScanned').value = d.toISOString().split('T')[0];
+    } else {
+        document.getElementById('editDateScanned').value = '';
+    }
+    document.getElementById('editCost').value = parseFloat(session.cost || 0);
+    document.getElementById('editValue').value = parseFloat(session.value || 0);
+    document.getElementById('editNet').value = parseFloat(session.net || 0);
+    
+    document.getElementById('sessionEditModal').classList.add('open');
+}
+
+async function saveSessionEdit() {
+    const sessionId = document.getElementById('editSessionId').value.trim();
+    if (!sessionId) { showToast('No session selected', 'error'); return; }
+    
+    const body = {
+        session_name: document.getElementById('editSessionName').value.trim(),
+        set_code: document.getElementById('editSetCode').value.trim(),
+        set_name: document.getElementById('editSetName').value.trim(),
+        date_scanned: document.getElementById('editDateScanned').value ? document.getElementById('editDateScanned').value + ' 00:00:00' : undefined,
+        cost: parseFloat(document.getElementById('editCost').value) || 0,
+        value: parseFloat(document.getElementById('editValue').value) || 0,
+        net: parseFloat(document.getElementById('editNet').value) || 0
+    };
+    
+    // Remove undefined fields
+    Object.keys(body).forEach(k => { if (body[k] === undefined || body[k] === null) delete body[k]; });
+    
+    try {
+        const resp = await fetch(`/api/inventory/sessions/${sessionId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast('Session updated', 'success');
+            closeModal('sessionEditModal');
+            loadSessions();
+        } else {
+            showToast('Update failed: ' + (data.error || ''), 'error');
+        }
+    } catch(e) {
+        showToast('Update failed', 'error');
     }
 }
 
@@ -630,15 +739,39 @@ async function loadOrders() {
         const orders = data.orders || [];
         
         const tbody = document.getElementById('ordersBody');
-        tbody.innerHTML = orders.map(o => `<tr>
-            <td>${o.order_id}</td>
-            <td>$${parseFloat(o.order_value || 0).toFixed(2)}</td>
-            <td>${o.order_date ? new Date(o.order_date).toLocaleDateString() : ''}</td>
-            <td>${o.card_count || 0}</td>
-        </tr>`).join('');
+        tbody.innerHTML = orders.map(o => {
+            const val = parseFloat(o.order_value || 0);
+            const cost = parseFloat(o.order_cost || 0);
+            const net = val - cost;
+            return `<tr>
+                <td>#${o.order_id}</td>
+                <td>${o.order_id_external || '—'}</td>
+                <td>$${val.toFixed(2)}</td>
+                <td>$${cost.toFixed(2)}</td>
+                <td class="${net >= 0 ? 'val pos' : 'val neg'}">$${net.toFixed(2)}</td>
+                <td>${o.order_date ? new Date(o.order_date).toLocaleDateString() : ''}</td>
+                <td>${o.card_count || 0}</td>
+            </tr>`;
+        }).join('');
+        
+        // Totals row
+        if (orders.length > 0) {
+            const tVal = orders.reduce((a, o) => a + parseFloat(o.order_value || 0), 0);
+            const tCost = orders.reduce((a, o) => a + parseFloat(o.order_cost || 0), 0);
+            const tNet = tVal - tCost;
+            const tCards = orders.reduce((a, o) => a + parseInt(o.card_count || 0), 0);
+            tbody.innerHTML += `<tr class="totals-row">
+                <td colspan="2"><strong>Totals</strong></td>
+                <td><strong>$${tVal.toFixed(2)}</strong></td>
+                <td><strong>$${tCost.toFixed(2)}</strong></td>
+                <td class="${tNet >= 0 ? 'val pos' : 'val neg'}"><strong>$${tNet.toFixed(2)}</strong></td>
+                <td></td>
+                <td><strong>${tCards}</strong></td>
+            </tr>`;
+        }
         
         if (!orders.length) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted)">No orders yet</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted)">No orders yet</td></tr>';
         }
     } catch(e) {
         console.error('Failed to load orders:', e);
@@ -647,26 +780,32 @@ async function loadOrders() {
 }
 
 function showNewOrderModal() {
-    document.getElementById('newOrderIdInput').value = 'ORD-' + Date.now().toString(36).toUpperCase();
+    document.getElementById('newOrderExternalId').value = '';
     document.getElementById('newOrderValueInput').value = '';
+    document.getElementById('newOrderCostInput').value = '';
+    // Default to today's date
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('newOrderDateInput').value = today;
     document.getElementById('newOrderModal').classList.add('open');
-    setTimeout(() => document.getElementById('newOrderIdInput').focus(), 200);
+    setTimeout(() => document.getElementById('newOrderExternalId').focus(), 200);
 }
 
 async function createOrder() {
-    const orderId = document.getElementById('newOrderIdInput').value.trim();
-    if (!orderId) { showToast('Order ID required', 'warning'); return; }
+    const orderIdExternal = document.getElementById('newOrderExternalId').value.trim();
+    if (!orderIdExternal) { showToast('External ID required', 'warning'); return; }
     const orderValue = parseFloat(document.getElementById('newOrderValueInput').value) || 0;
+    const orderCost = parseFloat(document.getElementById('newOrderCostInput').value) || 0;
+    const orderDate = document.getElementById('newOrderDateInput').value;
     
     try {
         const resp = await fetch('/api/inventory/orders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_id: orderId, order_value: orderValue })
+            body: JSON.stringify({ order_id_external: orderIdExternal, order_value: orderValue, order_cost: orderCost, order_date: orderDate })
         });
         const data = await resp.json();
         if (data.success) {
-            showToast('Order created', 'success');
+            showToast('Order created (#' + data.order_id + ')', 'success');
             closeModal('newOrderModal');
             loadOrders();
         } else {

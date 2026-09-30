@@ -79,11 +79,20 @@ async function initDatabase() {
     
     await p.execute(`
         CREATE TABLE IF NOT EXISTS tbl_orders (
-            order_id VARCHAR(32) PRIMARY KEY,
+            order_id INT AUTO_INCREMENT PRIMARY KEY,
+            order_id_external VARCHAR(64) DEFAULT '',
             order_value DECIMAL(10,2) DEFAULT 0.00,
+            order_cost DECIMAL(10,2) DEFAULT 0.00,
             order_date DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
+    
+    // Migration: add new columns if missing (for existing databases)
+    try { await p.execute(`ALTER TABLE tbl_orders ADD COLUMN order_id_external VARCHAR(64) DEFAULT '' AFTER order_id`); } catch (e) { /* column exists */ }
+    try { await p.execute(`ALTER TABLE tbl_orders ADD COLUMN order_cost DECIMAL(10,2) DEFAULT 0.00 AFTER order_value`); } catch (e) { /* column exists */ }
+    try { await p.execute(`ALTER TABLE tbl_orders MODIFY COLUMN order_id INT AUTO_INCREMENT`); } catch (e) { /* may fail if VARCHAR data exists, handled at app level */ }
+    // Also add order_id_external to tbl_inventory for orders created via the new flow
+    try { await p.execute(`ALTER TABLE tbl_inventory ADD COLUMN order_id_external VARCHAR(64) DEFAULT ''`); } catch (e) { /* column exists */ }
     
     await p.execute(`
         CREATE TABLE IF NOT EXISTS tbl_card (

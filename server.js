@@ -113,6 +113,29 @@ let sessionCounter = 0;
 let mtgSeqCounter = 0;
 const USD_TO_AUD = 1.55;
 
+// Initialize mtgSeqCounter from existing DB sessions on startup
+async function initSessionCounter() {
+    try {
+        const rows = await db.query(`SELECT session_id FROM tbl_sessions WHERE session_id LIKE 'MTG%'`);
+        let maxNum = 0;
+        for (const row of rows) {
+            const match = row.session_id.match(/MTG[A-Z]+-(\d+)/);
+            if (match) {
+                const num = parseInt(match[1], 10);
+                if (num > maxNum) maxNum = num;
+            }
+        }
+        mtgSeqCounter = maxNum;
+        console.log(`Session counter initialized from DB: mtgSeqCounter = ${mtgSeqCounter} (next: MTGXXXX-${mtgSeqCounter + 1})`);
+    } catch (err) {
+        console.log('Could not read sessions from DB for counter init, starting at 0:', err.message);
+        mtgSeqCounter = 0;
+    }
+}
+
+// Call this after DB is initialized
+setTimeout(initSessionCounter, 2000);
+
 function toAUD(usdPrice) {
     return usdPrice * USD_TO_AUD;
 }
@@ -897,7 +920,7 @@ app.get('/api/mtg/build-status', (req, res) => {
             const now = Date.now();
             const ageMs = now - mtime.getTime();
             const ageHours = ageMs / (1000 * 60 * 60);
-            response.is_outdated = ageHours > 72; // Only outdated if >72 hours old
+            response.is_outdated = ageHours > 24; // Only outdated if >24 hours old
             response.last_refreshed_formatted = formatDuration(ageMs);
         }
         

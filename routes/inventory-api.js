@@ -55,11 +55,12 @@ router.get('/sessions', async (req, res) => {
 router.put('/sessions/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { set_code, set_name, date_scanned, cost, value, net } = req.body;
+        const { session_name, set_code, set_name, date_scanned, cost, value, net } = req.body;
         
         const updates = [];
         const params = [];
         
+        if (session_name !== undefined) { updates.push('session_name = ?'); params.push(session_name); }
         if (set_code !== undefined) { updates.push('set_code = ?'); params.push(set_code); }
         if (set_name !== undefined) { updates.push('set_name = ?'); params.push(set_name); }
         if (date_scanned !== undefined) { updates.push('date_scanned = ?'); params.push(date_scanned); }
@@ -139,12 +140,68 @@ router.get('/cards', async (req, res) => {
         `, [...params, String(limit), String(offset)]);
 
         // Parse image_uris for each row
-        const cards = rows.map(row => ({
+        let cards = rows.map(row => ({
             ...row,
             price: parseFloat(row.price || 0),
             sold_price: row.sold_price ? parseFloat(row.sold_price) : null,
             card_image: row.scryfall_image_uris ? JSON.parse(row.scryfall_image_uris) : null
         }));
+
+        // Fallback: for cards without images, try local SQLite DB
+        const cardsMissingImages = cards.filter(c => !c.card_image && c.scryfall_id);
+        if (cardsMissingImages.length > 0) {
+            try {
+                const path = require('path');
+                const fs = require('fs');
+                const sqlitePath = path.join(__dirname, '..', 'data', 'mtg_cards.db');
+                if (fs.existsSync(sqlitePath)) {
+                    const sqlite3 = require('sqlite3');
+                    const sqliteDb = new sqlite3.Database(sqlitePath, sqlite3.OPEN_READONLY);
+                    
+                    // Build query: look up by scryfall_id (oracle_id in SQLite) 
+                    // or by card_name as last resort
+                    const missingIds = cardsMissingImages.map(c => c.scryfall_id).filter(Boolean);
+                    if (missingIds.length > 0) {
+                        const placeholders = missingIds.map(() => '?').join(',');
+                        sqliteDb.all(
+                            `SELECT oracle_id, normal_image_url, art_crop_url, image_uris FROM cards 
+                             WHERE oracle_id IN (${placeholders})`,
+                            missingIds,
+                            (err, sqliteRows) => {
+                                sqliteDb.close();
+                                if (!err && sqliteRows) {
+                                    // Build lookup by oracle_id
+                                    const imgMap = {};
+                                    for (const sr of sqliteRows) {
+                                        let uris = null;
+                                        if (sr.image_uris) {
+                                            try { uris = JSON.parse(sr.image_uris); } catch(e) {
+                                                uris = { small: sr.normal_image_url, normal: sr.normal_image_url };
+                                            }
+                                        } else if (sr.normal_image_url) {
+                                            uris = { small: sr.normal_image_url, normal: sr.normal_image_url };
+                                        }
+                                        if (uris) imgMap[sr.oracle_id] = uris;
+                                    }
+                                    // Apply fallback images
+                                    for (const card of cards) {
+                                        if (!card.card_image && card.scryfall_id && imgMap[card.scryfall_id]) {
+                                            card.card_image = imgMap[card.scryfall_id];
+                                        }
+                                    }
+                                }
+                                // Send response after fallback
+                                res.json({ cards, total, page, limit, total_pages: Math.ceil(total / limit) });
+                            }
+                        );
+                        return; // Response sent in callback
+                    }
+                    sqliteDb.close();
+                }
+            } catch (e) {
+                // SQLite fallback failed - ignore, send response without images
+            }
+        }
 
         res.json({
             cards,
@@ -263,20 +320,47 @@ router.get('/orders', async (req, res) => {
     }
 });
 
-// POST /api/inventory/orders — create a new order
+// POST /api/inventory/orders — create a new order (auto-increment order_id)
 router.post('/orders', async (req, res) => {
     try {
-        const { order_id, order_value } = req.body;
-        if (!order_id) {
-            return res.status(400).json({ error: 'order_id is required' });
-        }
-        await db.query(
-            'INSERT INTO tbl_orders (order_id, order_value) VALUES (?, ?)',
-            [order_id, order_value || 0]
+        const { order_id_external, order_value, order_cost, order_date } = req.body;
+        const dateVal = order_date || new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const result = await db.query(
+            `INSERT INTO tbl_orders (order_id_external, order_value, order_cost, order_date) VALUES (?, ?, ?, ?)`,
+            [order_id_external || '', order_value || 0, order_cost || 0, dateVal]
         );
-        res.json({ success: true, order_id });
+        const newId = result.insertId;
+        res.json({ success: true, order_id: newId, order_id_external: order_id_external || '' });
     } catch (err) {
         console.error('Error creating order:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// PUT /api/inventory/orders/:id — update an order
+router.put('/orders/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { order_id_external, order_value, order_cost, order_date } = req.body;
+        
+        const updates = [];
+        const params = [];
+        
+        if (order_id_external !== undefined) { updates.push('order_id_external = ?'); params.push(order_id_external); }
+        if (order_value !== undefined) { updates.push('order_value = ?'); params.push(order_value); }
+        if (order_cost !== undefined) { updates.push('order_cost = ?'); params.push(order_cost); }
+        if (order_date !== undefined) { updates.push('order_date = ?'); params.push(order_date); }
+        
+        if (updates.length === 0) {
+            return res.json({ success: true, message: 'No changes' });
+        }
+        
+        params.push(id);
+        await db.query(`UPDATE tbl_orders SET ${updates.join(', ')} WHERE order_id = ?`, params);
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error updating order:', err);
         res.status(500).json({ error: err.message });
     }
 });

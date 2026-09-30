@@ -380,12 +380,19 @@ def main():
                 update_build_step("insert", "active", "Starting batch inserts...")
                 insert_active = True
 
+            # Update progress every 2500 cards processed (regardless of skip/insert)
+            if total_attempted > 0 and total_attempted % 2500 == 0:
+                pct = round((total_attempted / max(total_cards_estimate, 1)) * 100, 1)
+                update_build_step("insert", "active",
+                    f"{total_english_found:,} English found, {processed:,} inserted, {skipped_existing:,} skipped, {filtered_non_english + filtered_no_image:,} filtered")
+                update_build_status(total_attempted, total_cards_estimate,
+                    f"Scanned {total_attempted:,} cards ({pct}%) — {total_english_found:,} English, {processed:,} new, {skipped_existing:,} skipped")
+                print(f"  Scanned {total_attempted:,} total ({pct}%) — {total_english_found:,} English, {processed:,} new, {skipped_existing:,} skipped")
+
             # Filter 3: Skip if already in database (resume mode)
             card_id = card.get('id')
             if card_id and card_id in existing_ids:
                 skipped_existing += 1
-                if skipped_existing % 5000 == 0:
-                    print(f"  Skipped {skipped_existing} cards already in DB...")
                 continue
 
             # Add to batch buffer
@@ -423,16 +430,6 @@ def main():
                     print(f"  Recovered: inserted {successful}/{len(batch_buffer)} cards individually")
 
                 batch_buffer = []
-
-                # Update status every 5000 cards
-                if processed % 5000 == 0:
-                    pct = round((processed / max(total_english_found, 1)) * 100, 1)
-                    remaining = total_english_found - processed - skipped_existing
-                    update_build_step("insert", "active",
-                        f"{processed} inserted, {skipped_existing} skipped, ~{remaining} remaining")
-                    update_build_status(processed, total_english_found,
-                                        f"Processed {processed} English cards ({pct}%)")
-                    print(f"  Processed {processed} English cards... ({pct}%)")
 
         # Process remaining cards in buffer
         if batch_buffer:

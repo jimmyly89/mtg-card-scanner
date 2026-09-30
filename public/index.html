@@ -102,7 +102,8 @@
         .db-badge.building { color: var(--orange); background: rgba(245,158,11,0.12); }
         .db-badge.crashed { color: var(--red); background: rgba(239,68,68,0.12); }
 
-        .hamburger-wrap { position: relative; flex-shrink: 0; }
+                .hamburger-wrap { position: relative; flex-shrink: 0; }
+                body.hamburger-open .hamburger-popup { display: block; }
         .hamburger-btn { width: 34px; height: 34px; border: none; border-radius: 8px; background: var(--glass-bg); border: 1px solid var(--glass-border); color: var(--text-secondary); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; font-family: inherit; }
         .hamburger-btn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-hover); }
         .hamburger-popup { position: absolute; top: calc(100% + 6px); left: 0; background: var(--bg-surface); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; min-width: 180px; box-shadow: 0 12px 48px rgba(0,0,0,0.5); z-index: 100; display: none; animation: fadeIn 0.12s ease-out; }
@@ -186,7 +187,7 @@
         .settings-cog:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-hover); }
 
         .db-tooltip-wrap { position: relative; display: inline-flex; align-items: center; }
-        .db-build-tooltip { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: var(--bg-surface); backdrop-filter: blur(24px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; min-width: 280px; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 200; pointer-events: none; opacity: 0; transition: opacity 0.15s; font-size: 11px; line-height: 1.4; }
+        .db-build-tooltip { position: absolute; top: calc(100% + 8px); left: 0; transform: none; background: var(--bg-surface); backdrop-filter: blur(24px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; min-width: 280px; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 200; pointer-events: none; opacity: 0; transition: opacity 0.15s; font-size: 11px; line-height: 1.4; }
         .db-tooltip-wrap:hover .db-build-tooltip, .db-tooltip-wrap:focus-within .db-build-tooltip { opacity: 1; }
         .db-build-tooltip .tip-title { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; white-space: nowrap; }
         .db-build-tooltip .tip-progress { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; }
@@ -409,6 +410,12 @@
         .disp-totals .dt-item b { display: block; font-size: 20px; font-weight: 800; color: var(--text-primary); margin: 0; }
         .disp-totals .dt-item .val.pos { color: var(--green); }
         .disp-totals .dt-item .val.neg { color: var(--red); }
+        .disp-title-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: var(--bg-surface); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+        .disp-title-session { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .disp-title-session span { color: var(--blue); font-weight: 500; }
+        .disp-title-live { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
+        .disp-title-live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); transition: background 0.3s; flex-shrink: 0; }
+        .disp-title-live.live .live-dot { background: var(--green); }
         .card-tile { background: var(--bg-elevated); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
         .card-tile.low-value { border-color: var(--red-border); }
         .review-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
@@ -478,7 +485,7 @@
 <div class="set-autocomplete-results" id="setAutocompleteResults"></div>
 </div>
 <div class="form-group"><label>Box Name</label><input type="text" id="boxNameInput" placeholder="e.g. Modern Horizons 3 Booster Box"></div>
-<div class="form-group"><label>Min Value ($)</label><input type="number" id="setupPriceThreshold" step="0.50" min="0" onchange="AppSettings.set('priceThreshold',parseFloat(this.value)||5)"></div>
+<div class="form-row"><div class="form-group"><label>Box Cost ($)</label><input type="number" id="setupBoxCost" step="0.50" min="0" placeholder="0.00" onchange="onBoxCostChange(this.value)"></div><div class="form-group"><label>Min Value ($)</label><input type="number" id="setupPriceThreshold" step="0.50" min="0" onchange="AppSettings.set('priceThreshold',parseFloat(this.value)||5)"></div></div>
 </div>
 </div>
 
@@ -550,7 +557,10 @@
 <div class="dt-item"><span class="dt-label">Profit</span><b class="val" id="dtProfit">$0</b></div>
 <div class="dt-item" style="cursor:pointer;background:rgba(34,197,94,0.12);border-color:rgba(34,197,94,0.25)" onclick="showFinishConfirm()"><span class="dt-label">Finish</span><b style="color:var(--green);font-size:16px" id="dtFinish">✓ Session</b></div>
 </div>
-<div class="disp-live-tag" id="dispLiveTag"><span class="live-dot"></span> Waiting for scanner</div>
+<div class="disp-title-bar" id="dispTitleBar">
+<div class="disp-title-session">Session: <span id="dispSessionTitleLabel">—</span></div>
+<div class="disp-title-live" id="dispTitleLive"><span class="live-dot"></span> Waiting for scanner</div>
+</div>
 <img class="disp-feed-img" id="dispFeedImg" style="display:none" alt="Scanner feed">
 <div class="disp-feed-placeholder" id="dispFeedPlaceholder"><span class="live-icon"></span> Scanner feed will appear here</div>
 <div class="disp-feed-overlay-bottom">
@@ -775,8 +785,10 @@ function showFullSetDropdown() {
 }
 document.addEventListener('click', function(e) { const inp = document.getElementById('setCodeInput'); if (inp && !inp.contains(e.target)) { const res = document.getElementById('setAutocompleteResults'); if (res && !res.contains(e.target)) hideSetAutocomplete(); } });
 function showToast(msg, type) { const c = document.getElementById('toastContainer'); const t = document.createElement('div'); t.className = 'toast' + (type ? ' ' + type : ''); t.textContent = msg; c.appendChild(t); setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 2500); }
-function toggleNavPopup() { document.getElementById('hamburgerPopup').classList.toggle('open'); }
-function switchTab(tab) { document.getElementById('setupPanel').classList.toggle('hidden', tab !== 'setup'); document.getElementById('scannerPanel').classList.toggle('hidden', tab !== 'scanner'); document.getElementById('displayPanel').classList.toggle('hidden', tab !== 'display'); document.getElementById('brandName').classList.toggle('brand-hidden', tab !== 'setup'); document.getElementById('headerStats').classList.toggle('hidden', tab === 'setup'); document.querySelectorAll('.ham-item[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === tab)); }
+function closeNavPopup() { document.getElementById('hamburgerPopup').classList.remove('open'); }
+function toggleNavPopup() { const p = document.getElementById('hamburgerPopup'); const wasOpen = p.classList.contains('open'); p.classList.toggle('open'); }
+document.addEventListener('click', function(e) { const wrap = document.querySelector('.hamburger-wrap'); if (wrap && !wrap.contains(e.target)) closeNavPopup(); });
+function switchTab(tab) { closeNavPopup(); document.getElementById('setupPanel').classList.toggle('hidden', tab !== 'setup'); document.getElementById('scannerPanel').classList.toggle('hidden', tab !== 'scanner'); document.getElementById('displayPanel').classList.toggle('hidden', tab !== 'display'); document.getElementById('headerStats').classList.toggle('hidden', tab === 'setup'); document.querySelectorAll('.ham-item[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === tab)); }
 
 // ── Scanner controller functions ──
 let scanStats = { scanned: 0, totalValue: 0, netValue: 0 };
@@ -1188,11 +1200,21 @@ let _pendingJoinSession = null;
 function joinWithCode() { const c = document.getElementById('sessionCodeInput').value.trim(); if (!c) { showToast('Enter session code', 'warning'); return; } showDevicePicker(c); }
 function joinWithCodeMain() { const c = document.getElementById('sessionCodeInputMain').value.trim(); if (!c) { showToast('Enter session code', 'warning'); return; } showDevicePicker(c); }
 function showDevicePicker(sid) { document.getElementById('devicePickerOverlay').classList.add('open'); _pendingJoinSession = sid; }
-function pickDevice(role) { document.getElementById('devicePickerOverlay').classList.remove('open'); const sid = _pendingJoinSession || document.getElementById('currentSessionDisplay').value.trim(); if (!sid) { showToast('No session', 'error'); return; } sessionId = sid; _pendingJoinSession = null; socket.emit('join-session', { sessionId: sid, deviceType: role }); showToast('Joined as ' + role + ': ' + sid, 'success'); switchTab(role); }
+function pickDevice(role) { document.getElementById('devicePickerOverlay').classList.remove('open'); const sid = _pendingJoinSession || document.getElementById('currentSessionDisplay').value.trim(); if (!sid) { showToast('No session', 'error'); return; } sessionId = sid; _pendingJoinSession = null; socket.emit('join-session', { sessionId: sid, deviceType: role }); showToast('Joined as ' + role + ': ' + sid, 'success'); document.getElementById('scannerSessionIdLabel').textContent = sid; const dl = document.getElementById('dispSessionTitleLabel'); if (dl) dl.textContent = sid; switchTab(role); }
+
+function onBoxCostChange(val) {
+  const cost = parseFloat(val) || 0;
+  AppSettings.set('boxCost', cost);
+  if (socket && sessionId) {
+    const boxName = document.getElementById('boxNameInput').value.trim();
+    socket.emit('set-box', { sessionId, boxName, boxCost: cost });
+  }
+}
 (function() {
   const l = AppSettings.get('setLock', ''); if (l) { const i = document.getElementById('setCodeInput'); if (i) { const name = ALL_SETS_BY[l] || l.toUpperCase(); i.value = name + ' (' + l.toUpperCase() + ')'; i.dataset.code = l; } }
   const b = AppSettings.get('boxName', ''); if (b) { const i = document.getElementById('boxNameInput'); if (i) i.value = b; }
   document.getElementById('boxNameInput').addEventListener('change', function() { AppSettings.set('boxName', this.value); });
+  const c = AppSettings.get('boxCost', 0); const ci = document.getElementById('setupBoxCost'); if (ci) ci.value = c;
   const t = AppSettings.get('priceThreshold', 5); document.getElementById('settingsPriceThreshold').value = t;
   const st = document.getElementById('setupPriceThreshold'); if (st) st.value = t;
   setTimeout(loadActiveSessions, 500);

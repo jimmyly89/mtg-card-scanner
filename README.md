@@ -63,7 +63,16 @@ The app is a **Node.js (Express)** server with a **Python** helper layer for car
 - **MariaDB** server (for inventory features)
 - Python packages: `onnxruntime`, `opencv-python`, `numpy`, `Pillow`, `requests`, `collectorvision`
 
-### 1. Install dependencies
+### 1. Get the app
+
+Clone this repository and enter the project directory:
+
+```bash
+git clone https://github.com/jimmyly89/mtg-card-scanner.git
+cd mtg-card-scanner
+```
+
+### 2. Install dependencies
 
 ```bash
 # Node dependencies
@@ -76,7 +85,7 @@ pip install "git+https://github.com/HanClinto/CollectorVision.git"
 
 > **Note:** `collectorvision` is not on PyPI — install it from the GitHub repo as shown above.
 
-### 2. Configure the database
+### 3. Configure the database
 
 Copy `.env.example` to `.env` and set your MariaDB connection details. The server connects to MariaDB at the host configured in `db.js` (default `192.168.4.41`, user `mtgscanner`).
 
@@ -84,7 +93,7 @@ Copy `.env.example` to `.env` and set your MariaDB connection details. The serve
 cp .env.example .env
 ```
 
-### 3. Build the card catalog (optional)
+### 4. Build the card catalog (optional)
 
 The app uses CollectorVision's pre-built MTG catalog (downloaded automatically on first scan). If you want to build/refresh the local SQLite card database:
 
@@ -92,7 +101,7 @@ The app uses CollectorVision's pre-built MTG catalog (downloaded automatically o
 python scripts/db_builder.py
 ```
 
-### 4. Start the server
+### 5. Start the server
 
 ```bash
 npm start

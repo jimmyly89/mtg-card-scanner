@@ -939,6 +939,60 @@ function updateScannerStats() {
   });
 }
 
+// ── Dollar "ching ching" sound when a high-value card is found ──
+let _cashAudioCtx = null;
+let _lastCashSoundAt = 0;
+function playCashSound() {
+  // Throttle: at most once per 1.5s to avoid overlapping chimes
+  const now = Date.now();
+  if (now - _lastCashSoundAt < 1500) return;
+  _lastCashSoundAt = now;
+
+  try {
+    if (!_cashAudioCtx) {
+      _cashAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const ctx = _cashAudioCtx;
+    const t0 = ctx.currentTime;
+
+    // "Ching" — two bright, bell-like tones (E6 then A6) with fast decay
+    const notes = [
+      { freq: 1318.5, start: 0.00, dur: 0.35 },  // E6
+      { freq: 1760.0, start: 0.12, dur: 0.45 }   // A6
+    ];
+    notes.forEach(n => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = n.freq;
+      osc.type = 'sine';
+      // Add a touch of harmonic for a more metallic "ching"
+      const osc2 = ctx.createOscillator();
+      osc2.frequency.value = n.freq * 2.01;
+      osc2.type = 'sine';
+      const gain2 = ctx.createGain();
+      gain2.gain.value = 0.15;
+
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0, t0 + n.start);
+      env.gain.linearRampToValueAtTime(0.5, t0 + n.start + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + n.start + n.dur);
+
+      osc.connect(gain);
+      osc2.connect(gain2);
+      gain.connect(env);
+      gain2.connect(env);
+      env.connect(ctx.destination);
+
+      osc.start(t0 + n.start);
+      osc.stop(t0 + n.start + n.dur + 0.05);
+      osc2.start(t0 + n.start);
+      osc2.stop(t0 + n.start + n.dur + 0.05);
+    });
+  } catch (e) {
+    console.warn('Cash sound unavailable:', e);
+  }
+}
+
 // ── Real scan loop: detection → OCR → match → emit ──
 let scanLoopRunning = false;
 let scanLoopFrameId = null;
@@ -1032,6 +1086,12 @@ function scanLoopFrame() {
         const price = scryfallCard.price_usd ? parseFloat(scryfallCard.price_usd) * 1.55 : 0;
         scanLoopCardIdSeq++;
         const cardId = 'scan-' + Date.now() + '-' + scanLoopCardIdSeq;
+        
+        // Play "ching ching" if this card is over the value threshold
+        const priceThreshold = parseFloat(AppSettings.get('priceThreshold', 5)) || 5;
+        if (price >= priceThreshold) {
+          playCashSound();
+        }
         
         const card = {
           id: cardId,

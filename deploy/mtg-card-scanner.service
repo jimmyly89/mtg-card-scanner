@@ -1,0 +1,44 @@
+# mtg-card-scanner.service — systemd unit for the MTG Card Scanner app.
+#
+# Install:
+#   sudo cp deploy/mtg-card-scanner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mtg-card-scanner
+#
+# Adjust User/Group and WorkingDirectory to match your LXC container user.
+# The app listens on HTTP 3000 and HTTPS 3443.
+
+[Unit]
+Description=MTG Card Scanner (Express + Python OCR)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a non-root user. Create it with:
+#   sudo useradd --system --home /opt/mtg-card-scanner --shell /usr/sbin/nologin mtgscanner
+User=mtgscanner
+Group=mtgscanner
+
+# Absolute path to the repository checkout.
+WorkingDirectory=/opt/mtg-card-scanner
+
+# Load secrets from the gitignored .env file (PORT, NODE_ENV, etc.).
+EnvironmentFile=-/opt/mtg-card-scanner/.env
+
+# The app spawns Python scripts (OCR / neural scanning), so give it a PATH
+# that includes both node and python3.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+# Hardening (adjust if the app needs more access).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/mtg-card-scanner/data /opt/mtg-card-scanner/uploads /opt/mtg-card-scanner/.certs
+
+[Install]
+WantedBy=multi-user.target

@@ -22,7 +22,7 @@ import gzip
 import io
 
 DB_CONFIG = {
-    'host': '192.168.4.37',
+    'host': '192.168.4.41',
     'user': 'mtgscanner',
     'password': 'Cookmush888!',
     'database': 'mtg_inventory',

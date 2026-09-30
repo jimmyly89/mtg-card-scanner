@@ -1,6 +1,6 @@
 -- ============================================================
 -- MTG Card Scanner — Inventory System SQL Schema
--- Run this on MariaDB at 192.168.4.37 with user mtgscanner
+-- Run this on MariaDB at 192.168.4.41 with user mtgscanner
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS mtg_inventory;

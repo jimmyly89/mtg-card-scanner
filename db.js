@@ -1,9 +1,9 @@
 // ── MariaDB Connection Pool ──────────────────────────────────────────────
-// Connects to the MariaDB instance at 192.168.4.37
+// Connects to the MariaDB instance at 192.168.4.41
 const mysql = require('mysql2/promise');
 
 const DB_CONFIG = {
-    host: '192.168.4.37',
+    host: '192.168.4.41',
     user: 'mtgscanner',
     password: 'Cookmush888!',
     database: 'mtg_inventory',

@@ -953,16 +953,8 @@ function startScanLoop() {
   if (scanLoopRunning) return;
   scanLoopRunning = true;
   scanLoopDetector = new CardDetector();
-  scanLoopOcr = new OCRProcessor();
   
-  // Init OCR provider (creates Tesseract worker)
-  scanLoopOcr.init().then(() => {
-    console.log('Scan loop: OCR initialized');
-  }).catch(err => {
-    console.warn('Scan loop: OCR init failed, will retry on each scan:', err);
-  });
-  
-  console.log('Scan loop started');
+  console.log('Scan loop started (CollectorVision backend)');
   scanLoopFrame();
 }
 
@@ -971,10 +963,6 @@ function stopScanLoop() {
   if (scanLoopFrameId) {
     cancelAnimationFrame(scanLoopFrameId);
     scanLoopFrameId = null;
-  }
-  if (scanLoopOcr) {
-    scanLoopOcr.destroy().catch(() => {});
-    scanLoopOcr = null;
   }
   scanLoopDetector = null;
   console.log('Scan loop stopped');
@@ -1025,84 +1013,100 @@ function scanLoopFrame() {
         if (!scanLoopDetector.isCardChanged(hash)) return;
         scanLoopDetector.markScanned(hash);
         
-        // Card is stable and changed — proceed to OCR
+        // Card is stable and changed — proceed to CollectorVision scan
         setScannerState('Reading...', 'Reading card...');
         
-        // Crop title region and run OCR
-        scanLoopOcr.cropToTitleRegion(result.crop).then(titleCrop => {
-          const setLock = getCurrentSetLock();
-          return scanLoopOcr.ocrAndSearchScryfall(titleCrop, setLock);
-        }).then(ocrResult => {
-          if (!ocrResult || !ocrResult.card) {
-            setScannerState('Uncertain', 'Could not read');
-            return;
-          }
-          
-          const scryfallCard = ocrResult.card;
-          const price = scryfallCard.prices?.usd ? parseFloat(scryfallCard.prices.usd) * 1.55 : 0;
-          scanLoopCardIdSeq++;
-          const cardId = 'scan-' + Date.now() + '-' + scanLoopCardIdSeq;
-          
-          const card = {
-            id: cardId,
-            scryfall_id: scryfallCard.id || '',
-            name: scryfallCard.name,
-            card_name: scryfallCard.name,
-            set_name: scryfallCard.set_name || '',
-            set_code: scryfallCard.set || '',
-            collector_number: scryfallCard.collector_number || '',
-            price: price,
-            priceUsd: scryfallCard.prices?.usd || 0,
-            image_uris: scryfallCard.image_uris || null,
-            condition: 'NM',
-            foil: false,
-            borderless: false,
-            addedToInventory: false
-          };
-          
-          // Update demo stats
-          scanStats.scanned++;
-          scanStats.totalValue += price;
-          scanStats.netValue += price;
-          updateScannerStats();
-          
-          // Show card info on title bar
-          setScannerState('Matched!', scryfallCard.name);
-          
-          // Update OCR debug panel with raw/processed crop and OCR text (if debug mode is on)
-          const ocrDebugPanel = document.getElementById('ocrDebugPanel');
-          if (ocrDebugPanel && ocrDebugPanel.style.display === 'block' && scanLoopOcr) {
-            if (scanLoopOcr._lastRawTitleCrop) {
-              const rawImg = document.getElementById('ocrRawPreview');
-              rawImg.src = scanLoopOcr._lastRawTitleCrop;
-              rawImg.style.display = 'block';
-            }
-            if (scanLoopOcr._lastProcessedTitleCrop) {
-              const procImg = document.getElementById('ocrProcessedPreview');
-              procImg.src = scanLoopOcr._lastProcessedTitleCrop;
-              procImg.style.display = 'block';
-            }
-            if (ocrResult) {
-              document.getElementById('ocrDebugText').textContent = ocrResult.ocrText || ocrResult.cleanedName || '—';
-              document.getElementById('ocrDebugScore').textContent = 'Match: ' + ((ocrResult.score || 0) * 100).toFixed(0) + '%';
-            }
-          }
-          
-          // Emit to session
-          if (socket && sessionId) {
-            socket.emit('scan-card', { sessionId, card });
-          }
-          
-          scanLoopLastScan = Date.now();
-        }).catch(err => {
-          console.warn('Scan loop: OCR error:', err);
-          setScannerState('Uncertain', 'Read error');
-        });
+        // Send the perspective-corrected crop to the server for CollectorVision
+        // embedding matching. The crop is already card-aligned, so we skip
+        // server-side corner detection (skip_detection=1).
+        const setLock = getCurrentSetLock();
+        return scanWithCollectorVision(result.crop, setLock);
+      }).then(scanResult => {
+        if (!scanResult || !scanResult.bestMatch) {
+          setScannerState('Uncertain', 'Could not read');
+          return;
+        }
+        
+        const match = scanResult.bestMatch;
+        const scryfallCard = match.card;
+        const price = scryfallCard.price_usd ? parseFloat(scryfallCard.price_usd) * 1.55 : 0;
+        scanLoopCardIdSeq++;
+        const cardId = 'scan-' + Date.now() + '-' + scanLoopCardIdSeq;
+        
+        const card = {
+          id: cardId,
+          scryfall_id: scryfallCard.id || '',
+          name: scryfallCard.name,
+          card_name: scryfallCard.name,
+          set_name: scryfallCard.set_name || '',
+          set_code: scryfallCard.set_code || scryfallCard.set || '',
+          collector_number: scryfallCard.collector_number || '',
+          price: price,
+          priceUsd: scryfallCard.price_usd || 0,
+          image_uris: scryfallCard.image_uris || null,
+          condition: 'NM',
+          foil: false,
+          borderless: false,
+          addedToInventory: false
+        };
+        
+        // Update demo stats
+        scanStats.scanned++;
+        scanStats.totalValue += price;
+        scanStats.netValue += price;
+        updateScannerStats();
+        
+        // Show card info on title bar
+        setScannerState('Matched!', scryfallCard.name);
+        
+        // Update debug panel with scan info (if debug mode is on)
+        const ocrDebugPanel = document.getElementById('ocrDebugPanel');
+        if (ocrDebugPanel && ocrDebugPanel.style.display === 'block') {
+          document.getElementById('ocrDebugText').textContent = scryfallCard.name || '—';
+          document.getElementById('ocrDebugScore').textContent = 'Match: ' + ((match.score || 0) * 100).toFixed(0) + '%';
+        }
+        
+        // Emit to session
+        if (socket && sessionId) {
+          socket.emit('scan-card', { sessionId, card });
+        }
+        
+        scanLoopLastScan = Date.now();
+      }).catch(err => {
+        console.warn('Scan loop: CollectorVision scan error:', err);
+        setScannerState('Uncertain', 'Read error');
       });
     }
   }).catch(err => {
     // Detection errors are normal (no card in frame) — just continue
   });
+}
+
+// Send a perspective-corrected card crop to the server for CollectorVision
+// embedding matching. Returns { bestMatch, alternatives, needsManualConfirmation }.
+async function scanWithCollectorVision(cropDataUrl, setLock) {
+  try {
+    const blob = await (await fetch(cropDataUrl)).blob();
+    const formData = new FormData();
+    formData.append('image', blob, 'scan.jpg');
+    // skip_detection=1 tells the server the crop is already card-aligned
+    formData.append('skip_detection', '1');
+
+    const response = await fetch('/api/mtg/scan-neural', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || `Server error: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('CollectorVision scan error:', error);
+    return null;
+  }
 }
 
 function openSettings() { 

@@ -733,8 +733,9 @@ app.get('/api/mtg/card-versions', (req, res) => {
     }
 });
 
-// POST /api/mtg/scan-neural - Neural card scanning using ONNX models (Cornelius + Milo)
-// This uses a trained neural network for better corner detection and embedding-based matching.
+// POST /api/mtg/scan-neural - Neural card scanning using CollectorVision (Cornelius + Milo)
+// Uses the official CollectorVision library: learned corner detection + pre-built
+// embedding catalog cosine search. No OCR. Mirrors CollectorVision's backend.
 app.post('/api/mtg/scan-neural', upload.single('image'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No image uploaded' });
@@ -746,7 +747,13 @@ app.post('/api/mtg/scan-neural', upload.single('image'), async (req, res) => {
     try {
         console.log(`Neural scan: ${req.file.originalname || 'unknown'}`);
 
-        const scanResult = await runPythonScript('scripts/neural_scanner.py', [imagePath]);
+        // skip_detection=1 means the client already sent a perspective-corrected
+        // card crop, so the server bypasses Cornelius corner detection.
+        const skipDetection = req.body && req.body.skip_detection === '1';
+        const args = [imagePath];
+        if (skipDetection) args.push('skip');
+
+        const scanResult = await runPythonScript('scripts/collectorvision_scanner.py', args);
 
         if (scanResult.error) {
             return res.status(500).json({ 

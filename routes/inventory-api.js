@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const ExcelJS = require('exceljs');
 
 // ── SESSIONS ─────────────────────────────────────────────────────────────
 
@@ -78,6 +79,211 @@ router.put('/sessions/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('Error updating session:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/inventory/sessions/:id/export — export a session's cards to Excel
+router.get('/sessions/:id/export', async (req, res) => {
+    try {
+        const sessionId = req.params.id;
+
+        // Fetch the session
+        const session = await db.getOne('SELECT * FROM tbl_sessions WHERE session_id = ?', [sessionId]);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // Fetch all cards in the session
+        const cards = await db.query(`
+            SELECT i.*, 
+                   tc.name AS scryfall_name,
+                   tc.set_code AS scryfall_set_code,
+                   tc.set_name AS scryfall_set_name,
+                   tc.collector_number,
+                   tc.rarity,
+                   tc.type_line,
+                   tc.mana_cost,
+                   tc.colors,
+                   tc.color_identity,
+                   tc.cmc,
+                   tc.power,
+                   tc.toughness,
+                   tc.loyalty,
+                   tc.artist,
+                   tc.released_at,
+                   tc.prices,
+                   tc.image_uris
+            FROM tbl_inventory i
+            LEFT JOIN tbl_card tc ON i.scryfall_id = tc.scryfall_id
+            WHERE i.session_id = ?
+            ORDER BY i.id ASC
+        `, [sessionId]);
+
+        // Build the workbook
+        const workbook = new ExcelJS.Workbook();
+
+        // ── Sheet 1: Session Summary ─────────────────────────────────────
+        const summary = workbook.addWorksheet('Session Summary');
+        summary.columns = [
+            { header: 'Field', key: 'field', width: 22 },
+            { header: 'Value', key: 'value', width: 40 }
+        ];
+        summary.getRow(1).font = { bold: true, size: 12 };
+        summary.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+        summary.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+
+        const summaryRows = [
+            ['Session ID', session.session_id],
+            ['Session Name', session.session_name],
+            ['Set Code', session.set_code],
+            ['Set Name', session.set_name],
+            ['Date Scanned', session.date_scanned ? new Date(session.date_scanned).toLocaleString() : ''],
+            ['Cost', session.cost],
+            ['Value', session.value],
+            ['Net', session.net],
+            ['Card Count', cards.length]
+        ];
+        summaryRows.forEach(r => summary.addRow(r));
+
+        // ── Sheet 2: Cards ───────────────────────────────────────────────
+        const ws = workbook.addWorksheet('Cards');
+
+        // Define all columns (full inventory + scryfall enrichment)
+        const columns = [
+            { header: 'ID', key: 'id', width: 8 },
+            { header: 'Card Name', key: 'card_name', width: 30 },
+            { header: 'Set Name', key: 'set_name', width: 24 },
+            { header: 'Set Code', key: 'set_code', width: 10 },
+            { header: 'Condition', key: 'card_condition', width: 10 },
+            { header: 'Scryfall ID', key: 'scryfall_id', width: 34 },
+            { header: 'Session ID', key: 'session_id', width: 12 },
+            { header: 'Active', key: 'active', width: 8 },
+            { header: 'Foil', key: 'foil', width: 8 },
+            { header: 'Borderless', key: 'borderless', width: 12 },
+            { header: 'Date Sold', key: 'date_sold', width: 18 },
+            { header: 'Order ID', key: 'order_id', width: 12 },
+            { header: 'Price', key: 'price', width: 12 },
+            { header: 'Sold Price', key: 'sold_price', width: 12 },
+            { header: 'Created At', key: 'created_at', width: 18 },
+            // Scryfall enrichment
+            { header: 'Scryfall Name', key: 'scryfall_name', width: 30 },
+            { header: 'Scryfall Set Code', key: 'scryfall_set_code', width: 10 },
+            { header: 'Scryfall Set Name', key: 'scryfall_set_name', width: 24 },
+            { header: 'Collector Number', key: 'collector_number', width: 14 },
+            { header: 'Rarity', key: 'rarity', width: 12 },
+            { header: 'Type Line', key: 'type_line', width: 30 },
+            { header: 'Mana Cost', key: 'mana_cost', width: 10 },
+            { header: 'Colors', key: 'colors', width: 14 },
+            { header: 'Color Identity', key: 'color_identity', width: 14 },
+            { header: 'CMC', key: 'cmc', width: 8 },
+            { header: 'Power', key: 'power', width: 8 },
+            { header: 'Toughness', key: 'toughness', width: 10 },
+            { header: 'Loyalty', key: 'loyalty', width: 8 },
+            { header: 'Artist', key: 'artist', width: 20 },
+            { header: 'Released At', key: 'released_at', width: 14 },
+            { header: 'Prices', key: 'prices', width: 40 },
+            { header: 'Image URIs', key: 'image_uris', width: 60 }
+        ];
+
+        ws.columns = columns;
+
+        // Style header row
+        const headerRow = ws.getRow(1);
+        headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+        headerRow.height = 20;
+
+        // Add data rows
+        cards.forEach(card => {
+            const row = {
+                id: card.id,
+                card_name: card.card_name,
+                set_name: card.set_name,
+                set_code: card.set_code,
+                card_condition: card.card_condition,
+                scryfall_id: card.scryfall_id,
+                session_id: card.session_id,
+                active: card.active,
+                foil: card.foil,
+                borderless: card.borderless,
+                date_sold: card.date_sold ? new Date(card.date_sold).toLocaleString() : '',
+                order_id: card.order_id,
+                price: card.price,
+                sold_price: card.sold_price,
+                created_at: card.created_at ? new Date(card.created_at).toLocaleString() : '',
+                scryfall_name: card.scryfall_name,
+                scryfall_set_code: card.scryfall_set_code,
+                scryfall_set_name: card.scryfall_set_name,
+                collector_number: card.collector_number,
+                rarity: card.rarity,
+                type_line: card.type_line,
+                mana_cost: card.mana_cost,
+                colors: card.colors,
+                color_identity: card.color_identity,
+                cmc: card.cmc,
+                power: card.power,
+                toughness: card.toughness,
+                loyalty: card.loyalty,
+                artist: card.artist,
+                released_at: card.released_at,
+                prices: card.prices,
+                image_uris: card.image_uris
+            };
+            ws.addRow(row);
+        });
+
+        // Freeze the header row
+        ws.freezePanes = 'A2';
+
+        // Auto-filter on the header row
+        ws.autoFilter = { ref: `A1:${columns[columns.length - 1].key.toUpperCase()}1` };
+
+        // ── Sheet 3: Orders (if any cards reference orders) ──────────────
+        const orderIds = [...new Set(cards.map(c => c.order_id).filter(Boolean))];
+        if (orderIds.length > 0) {
+            const placeholders = orderIds.map(() => '?').join(',');
+            const orders = await db.query(
+                `SELECT * FROM tbl_orders WHERE order_id IN (${placeholders})`,
+                orderIds
+            );
+            if (orders.length > 0) {
+                const ordersWs = workbook.addWorksheet('Orders');
+                const orderColumns = [
+                    { header: 'Order ID', key: 'order_id', width: 12 },
+                    { header: 'External Order ID', key: 'order_id_external', width: 20 },
+                    { header: 'Order Value', key: 'order_value', width: 14 },
+                    { header: 'Order Cost', key: 'order_cost', width: 14 },
+                    { header: 'Order Date', key: 'order_date', width: 18 }
+                ];
+                ordersWs.columns = orderColumns;
+                const oHeader = ordersWs.getRow(1);
+                oHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                oHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
+                orders.forEach(o => ordersWs.addRow({
+                    order_id: o.order_id,
+                    order_id_external: o.order_id_external,
+                    order_value: o.order_value,
+                    order_cost: o.order_cost,
+                    order_date: o.order_date ? new Date(o.order_date).toLocaleString() : ''
+                }));
+                ordersWs.freezePanes = 'A2';
+            }
+        }
+
+        // Write to buffer and send
+        const safeName = (session.session_name || `session_${session.session_id}`)
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/\s+/g, '_');
+        const filename = `session_${session.session_id}_${safeName}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error('Error exporting session:', err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -184,7 +184,7 @@
         </div>
         <div class="ui-card">
             <div class="data-table-wrap"><table class="data-table" id="sessionsTable"><thead><tr>
-                <th>Session ID</th><th>Set Code</th><th>Set Name</th><th>Date</th><th>Cost</th><th>Value</th><th>Net</th><th>Cards</th><th style="width:40px">Edit</th>
+                <th>Session ID</th><th>Set Code</th><th>Set Name</th><th>Date</th><th>Cost</th><th>Value</th><th>Net</th><th>Cards</th><th style="width:40px">Edit</th><th style="width:60px">Export</th>
             </tr></thead><tbody id="sessionsBody"></tbody></table></div>
             <div style="margin-top:8px;font-size:11px;color:var(--text-muted);text-align:center" id="sessionsCount"></div>
         </div>
@@ -393,6 +393,7 @@ async function loadSessions() {
             <td class="${s.net >= 0 ? 'val pos' : 'val neg'}">$${parseFloat(s.net || 0).toFixed(2)}</td>
             <td>${s.card_count || 0}</td>
             <td><button class="btn btn-ghost btn-sm" onclick="openSessionEditModal('${s.session_id}')" style="font-size:14px;padding:2px 8px">✏️</button></td>
+            <td><button class="btn btn-ghost btn-sm" onclick="exportSession('${s.session_id}')" style="font-size:14px;padding:2px 8px" title="Export to Excel">📥</button></td>
         </tr>`).join('');
 
         // Totals row
@@ -405,6 +406,7 @@ async function loadSessions() {
                 <td><strong>$${t.total_value.toFixed(2)}</strong></td>
                 <td class="${t.total_net >= 0 ? 'val pos' : 'val neg'}"><strong>$${t.total_net.toFixed(2)}</strong></td>
                 <td><strong>${t.total_cards}</strong></td>
+                <td></td>
                 <td></td>
             </tr>`;
         }
@@ -422,6 +424,13 @@ async function loadSessions() {
         console.error('Failed to load sessions:', e);
         showToast('Failed to load sessions', 'error');
     }
+}
+
+// ── Session Export ──
+function exportSession(sessionId) {
+    showToast('Preparing Excel export...', 'info');
+    // Navigate to the export endpoint; the server streams the .xlsx file
+    window.location.href = `/api/inventory/sessions/${sessionId}/export`;
 }
 
 // ── Session Edit Modal ──

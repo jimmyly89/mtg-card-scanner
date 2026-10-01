@@ -155,10 +155,17 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 # Load existing values so we don't clobber them on re-run.
-set -a
-# shellcheck disable=SC1090
-source "${ENV_FILE}"
-set +a
+# Parse .env safely line-by-line (never `source` it directly — values like
+# REFRESH_SCHEDULE="0 3 * * *" contain shell metacharacters that would break
+# sourcing). Only simple KEY=VALUE lines are honoured; surrounding quotes are
+# stripped.
+while IFS='=' read -r _key _val; do
+    _key="${_key//[[:space:]]/}"
+    _val="${_val%\"}"; _val="${_val#\"}"
+    if [[ -n "${_key}" && "${_key}" != \#* ]]; then
+        export "${_key}=${_val}"
+    fi
+done < "${ENV_FILE}"
 
 # Prompt for DB credentials only if not already set.
 prompt_value() {
@@ -215,6 +222,13 @@ updates = {
     "NODE_ENV": os.environ.get("NODE_ENV", "production"),
     "REFRESH_SCHEDULE": os.environ.get("REFRESH_SCHEDULE", "0 3 * * *"),
 }
+# Values that contain spaces / shell metacharacters must be quoted so the
+# .env file can be safely sourced by the shell scripts.
+def fmt(key, val):
+    if any(ch in val for ch in " *?[]{}|&;<>()$`\"'\\\t\n"):
+        return f'{key}="{val}"'
+    return f"{key}={val}"
+
 lines = []
 seen = set()
 if os.path.exists(path):
@@ -224,12 +238,12 @@ if os.path.exists(path):
             key = line.split("=", 1)[0].strip()
             if key in updates:
                 seen.add(key)
-                lines.append(f"{key}={updates[key]}")
+                lines.append(fmt(key, updates[key]))
                 continue
         lines.append(line)
 for key, val in updates.items():
     if key not in seen:
-        lines.append(f"{key}={val}")
+        lines.append(fmt(key, val))
 open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 PY
 chmod 600 "${ENV_FILE}"
@@ -304,7 +318,8 @@ systemctl enable "${SERVICE_NAME}" >> "${LOG_FILE}" 2>&1 || die "Failed to enabl
 
 # ── Install cron job (idempotent — no duplicates) ───────────────────────────
 log "Installing cron job..."
-REFRESH_SCHEDULE="${REFRESH_SCHEDULE:-$(grep -E '^REFRESH_SCHEDULE=' "${ENV_FILE}" | cut -d= -f2- || echo '0 3 * * *')}"
+# Extract REFRESH_SCHEDULE from .env, stripping any surrounding quotes.
+REFRESH_SCHEDULE="${REFRESH_SCHEDULE:-$(grep -E '^REFRESH_SCHEDULE=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '"' || echo '0 3 * * *')}"
 # Rewrite the schedule line in the cron template.
 sed "s|^0 3 \* \* \* mtgscanner|${REFRESH_SCHEDULE} mtgscanner|" \
     "${APP_DIR}/deploy/mtg-card-scanner.cron" > "${CRON_FILE}"

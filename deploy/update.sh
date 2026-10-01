@@ -154,7 +154,7 @@ if ! cmp -s "${APP_DIR}/deploy/mtg-card-scanner.service" "${SERVICE_FILE}"; then
 fi
 if ! cmp -s "${APP_DIR}/deploy/mtg-card-scanner.cron" "${CRON_FILE}"; then
     log "Updating cron file..."
-    REFRESH_SCHEDULE="$(grep -E '^REFRESH_SCHEDULE=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- || echo '0 3 * * *')"
+    REFRESH_SCHEDULE="$(grep -E '^REFRESH_SCHEDULE=' "${ENV_FILE}" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || echo '0 3 * * *')"
     sed "s|^0 3 \* \* \* mtgscanner|${REFRESH_SCHEDULE} mtgscanner|" \
         "${APP_DIR}/deploy/mtg-card-scanner.cron" > "${CRON_FILE}"
     chmod 644 "${CRON_FILE}"

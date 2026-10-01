@@ -46,12 +46,17 @@ log()  { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 die()  { log "ERROR: $*" >&2; exit 1; }
 
 # Load .env values into the environment (without clobbering existing vars).
+# Parsed line-by-line — never `source`d directly, because values like
+# REFRESH_SCHEDULE="0 3 * * *" contain shell metacharacters.
 load_env() {
     if [[ -f "${ENV_FILE}" ]]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "${ENV_FILE}"
-        set +a
+        while IFS='=' read -r _key _val; do
+            _key="${_key//[[:space:]]/}"
+            _val="${_val%\"}"; _val="${_val#\"}"
+            if [[ -n "${_key}" && "${_key}" != \#* ]]; then
+                export "${_key}=${_val}"
+            fi
+        done < "${ENV_FILE}"
     fi
 }
 

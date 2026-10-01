@@ -1,12 +1,39 @@
 // ── MariaDB Connection Pool ──────────────────────────────────────────────
-// Connects to the MariaDB instance at 192.168.4.41
+// Connects to the EXTERNAL MariaDB instance. Credentials come from the
+// environment (loaded by systemd EnvironmentFile) or the gitignored .env file
+// at the repo root — never hardcoded here.
 const mysql = require('mysql2/promise');
+const fs = require('fs');
+const path = require('path');
+
+// Minimal .env parser so the app works even when not launched via systemd
+// (e.g. `node server.js` from a shell). systemd already injects these as real
+// environment variables, in which case the file is ignored.
+function loadEnvFile() {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) return {};
+    const out = {};
+    try {
+        for (const raw of fs.readFileSync(envPath, 'utf8').split('\n')) {
+            const line = raw.trim();
+            if (!line || line.startsWith('#') || !line.includes('=')) continue;
+            const idx = line.indexOf('=');
+            const key = line.slice(0, idx).trim();
+            const value = line.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+            if (key) out[key] = value;
+        }
+    } catch (e) { /* ignore unreadable .env */ }
+    return out;
+}
+
+const _env = { ...loadEnvFile(), ...process.env };
 
 const DB_CONFIG = {
-    host: '192.168.4.41',
-    user: 'mtgscanner',
-    password: 'Cookmush888!',
-    database: 'mtg_inventory',
+    host: _env.DB_HOST || '127.0.0.1',
+    port: parseInt(_env.DB_PORT || '3306', 10),
+    user: _env.DB_USER || 'mtgscanner',
+    password: _env.DB_PASSWORD || '',
+    database: _env.DB_NAME || 'mtg_inventory',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -21,18 +48,10 @@ async function getPool() {
     return pool;
 }
 
-// Initialize database: create DB and tables if they don't exist
+// Initialize database: create tables if they don't exist (non-destructive).
+// The database itself must already exist on the external MariaDB server; we
+// never attempt CREATE DATABASE here (the app user may not have that right).
 async function initDatabase() {
-    // First connect without database to create it
-    const initConn = await mysql.createConnection({
-        host: DB_CONFIG.host,
-        user: DB_CONFIG.user,
-        password: DB_CONFIG.password
-    });
-    
-    await initConn.execute(`CREATE DATABASE IF NOT EXISTS mtg_inventory`);
-    await initConn.end();
-    
     const p = await getPool();
     
     // Create tables

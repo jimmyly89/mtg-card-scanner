@@ -1,0 +1,24 @@
+# MTG Card Scanner — daily data refresh.
+#
+# Installed to /etc/cron.d/mtg-card-scanner by install.sh. This schedules DATA
+# REFRESH ONLY. Code updates stay manual (run deploy/update.sh).
+#
+# The schedule is in the container's local time. For Australia/Sydney (with
+# daylight saving), set the container timezone explicitly:
+#   timedatectl set-timezone Australia/Sydney
+# or, if timedatectl is unavailable in the LXC, set TZ in the cron environment
+# below. The default schedule is 03:00 daily.
+#
+# The refresh runs as mtgscanner, uses absolute paths, loads the same .env as
+# the service, and uses flock to prevent overlapping runs. Output is logged to
+# the writable application log directory (rotated by logrotate).
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Uncomment to force Sydney time regardless of the container timezone:
+# TZ=Australia/Sydney
+
+# Default: daily at 03:00. install.sh rewrites this line from REFRESH_SCHEDULE
+# in .env (default "0 3 * * *").
+0 3 * * * mtgscanner /opt/mtg-card-scanner/deploy/refresh-data.sh >> /opt/mtg-card-scanner/data/logs/refresh.log 2>&1

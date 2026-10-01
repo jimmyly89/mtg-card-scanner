@@ -16,18 +16,16 @@ import json
 import sys
 import time
 import os
+import argparse
 import urllib.request
 import urllib.error
 import gzip
 import io
 
-DB_CONFIG = {
-    'host': '192.168.4.41',
-    'user': 'mtgscanner',
-    'password': 'Cookmush888!',
-    'database': 'mtg_inventory',
-    'charset': 'utf8mb4'
-}
+# Shared configuration (DB credentials, interpreter, paths) from .env.
+from env_config import db_config
+
+DB_CONFIG = db_config()
 
 SCRYFALL_BULK_URL = 'https://api.scryfall.com/bulk-data'
 
@@ -94,8 +92,29 @@ def get_bulk_data_url():
     sys.exit(1)
 
 
-def download_and_parse(url):
-    """Download the bulk data (gzipped JSON) and yield parsed card objects."""
+def download_and_parse(url, file_path=None):
+    """Download the bulk data (gzipped JSON) and yield parsed card objects.
+
+    If ``file_path`` is given, the (already-decompressed) JSON is read from
+    that local file instead of downloading — used to share one download between
+    the SQLite builder and this MariaDB loader.
+    """
+    if file_path:
+        print(f"Reading bulk data from shared file: {file_path}")
+        try:
+            with open(file_path, 'rb') as f:
+                data = json.loads(f.read().decode('utf-8'))
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and 'data' in data:
+                return data['data']
+            else:
+                print(f"ERROR: Unexpected JSON structure: {type(data)}")
+                sys.exit(1)
+        except Exception as e:
+            print(f"ERROR reading shared file: {e}")
+            sys.exit(1)
+
     print(f"Downloading bulk data...")
     req = urllib.request.Request(url, headers={'User-Agent': 'MTG-Scanner/1.0'})
     
@@ -289,7 +308,14 @@ def main():
     print("=" * 60)
     print("MTG Scanner — Scryfall tbl_card Loader")
     print("=" * 60)
-    
+
+    parser = argparse.ArgumentParser(description="Load Scryfall bulk data into MariaDB tbl_card")
+    parser.add_argument(
+        "--file", dest="file_path", default=None,
+        help="Path to a shared default-cards.json to reuse instead of downloading."
+    )
+    args = parser.parse_args()
+
     # Connect to MariaDB
     print("\nConnecting to MariaDB...")
     try:
@@ -309,8 +335,8 @@ def main():
     url = get_bulk_data_url()
     
     # Download and parse
-    print("\nDownloading card data (this may take a while)...")
-    cards = download_and_parse(url)
+    print("\nLoading card data (this may take a while)...")
+    cards = download_and_parse(url, file_path=args.file_path)
     
     total = len(cards)
     print(f"Parsed {total} cards. Inserting into database...")

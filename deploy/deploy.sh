@@ -104,6 +104,20 @@ command -v python3 >/dev/null 2>&1 || die "python3 is not installed"
 [[ -d "${APP_DIR}/.git" ]] || die "Not a git repository: ${APP_DIR}"
 cd "${APP_DIR}"
 
+# ── Privilege check ──────────────────────────────────────────────────────────
+# This script restarts the systemd service, which requires root. The previous
+# version ran as the mtgscanner user and failed on the privileged restart.
+# Prefer deploy/update.sh (root-orchestrated). If run as a non-root user, we
+# still allow the fetch/install steps but require sudo for the restart.
+NEED_SUDO=0
+if [[ "$(id -u)" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        die "This script needs root to restart the service. Run as root or via sudo."
+    fi
+    NEED_SUDO=1
+    log "Running as non-root; will use sudo for the systemd restart."
+fi
+
 # ── Locking (prevent overlapping deployments) ────────────────────────────────
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
@@ -163,15 +177,23 @@ fi
 log "Installing npm dependencies..."
 npm ci --omit=dev --no-audit --no-fund
 
-log "Installing Python dependencies..."
-python3 -m pip install --upgrade pip >/dev/null 2>&1 || true
-python3 -m pip install --no-cache-dir \
-    requests ijson opencv-python-headless numpy onnxruntime
+log "Installing Python dependencies (virtual environment)..."
+VENV_PY="${APP_DIR}/.venv/bin/python"
+if [[ -x "${VENV_PY}" ]]; then
+    "${VENV_PY}" -m pip install --upgrade pip >/dev/null 2>&1 || true
+    "${VENV_PY}" -m pip install --no-cache-dir -r "${APP_DIR}/requirements.txt"
+else
+    die "Virtual environment not found at ${VENV_PY}. Run deploy/install.sh first."
+fi
 
-# ── Restart the app via systemd ──────────────────────────────────────────────
+# ── Restart the app via systemd (requires root) ──────────────────────────────
 if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     log "Restarting systemd service '${SERVICE_NAME}'..."
-    systemctl restart "${SERVICE_NAME}"
+    if [[ "${NEED_SUDO}" -eq 1 ]]; then
+        sudo systemctl restart "${SERVICE_NAME}"
+    else
+        systemctl restart "${SERVICE_NAME}"
+    fi
 else
     die "systemd service '${SERVICE_NAME}' not found. Install deploy/mtg-card-scanner.service first."
 fi

@@ -1,0 +1,35 @@
+# MTG Card Scanner — Python dependencies
+#
+# Install into a dedicated virtual environment:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# The server's Python subprocesses and scheduled jobs must use the same
+# interpreter (see PYTHON_INTERPRETER in .env).
+
+# ── Core scanning / image processing ──────────────────────────────────────
+numpy>=1.24
+Pillow>=9.0
+opencv-python-headless>=4.7
+
+# ── Neural card matching (CollectorVision) ────────────────────────────────
+# CollectorVision is pinned to a tested Git commit so model/catalog behaviour
+# is reproducible. It pulls in Pillow/numpy/opencv itself.
+onnxruntime>=1.16
+collectorvision @ git+https://github.com/HanClinto/CollectorVision@2a122d0
+
+# Hugging Face model + catalog artifact resolution (used by CollectorVision
+# to download Cornelius/Milo weights and the MTG embedding catalog).
+huggingface_hub>=1.0,<2
+
+# ── OCR fallback (identifier.py / neural_scanner.py) ──────────────────────
+# Requires the system `tesseract-ocr` package too (installed by install.sh).
+pytesseract>=0.3.10
+imagehash>=4.3
+
+# ── Scryfall bulk-data download / streaming ───────────────────────────────
+requests>=2.31
+ijson>=3.2
+
+# ── MariaDB client (scryfall_loader.py) ───────────────────────────────────
+mysql-connector-python>=8.3

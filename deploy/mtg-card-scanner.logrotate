@@ -1,0 +1,27 @@
+# MTG Card Scanner — log rotation.
+#
+# Installed to /etc/logrotate.d/mtg-card-scanner by install.sh.
+# Rotates the application and refresh logs. The app log is written by the
+# systemd service (journald) and the refresh log by the cron job.
+
+/opt/mtg-card-scanner/data/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 mtgscanner mtgscanner
+}
+
+/var/log/mtg-card-scanner-deploy.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 root root
+}

@@ -15,6 +15,7 @@ Key improvements over v1:
 import requests
 import sqlite3
 import json
+import argparse
 from pathlib import Path
 from datetime import datetime
 import sys
@@ -105,13 +106,6 @@ def get_bulk_data_info():
             }
 
     raise ValueError("Could not find default_cards bulk data")
-
-
-def get_existing_ids(conn):
-    """Get the set of card IDs already in the database (for resume support)."""
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM cards")
-    return {row[0] for row in cursor.fetchall()}
 
 
 def create_database(force_recreate=False):
@@ -279,15 +273,34 @@ def download_bulk_file(url):
 
 
 def process_card_batch(conn, batch_data):
-    """Insert a batch of prepared card tuples into the database."""
+    """Insert or update a batch of cards.
+
+    Uses an upsert that refreshes metadata and prices but PRESERVES the derived
+    hash columns (full_card_phash, full_card_dhash, art_crop_phash, color_hash)
+    so a daily refresh never wipes scan hashes.
+    """
     cursor = conn.cursor()
     cursor.executemany("""
-        INSERT OR REPLACE INTO cards 
+        INSERT INTO cards 
         (id, oracle_id, name, printed_name, set_code, collector_number, lang, layout, 
          image_uris, art_crop_url, normal_image_url, 
          usd_price, usd_foil_price,
          full_card_phash, full_card_dhash, art_crop_phash, color_hash)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            oracle_id = excluded.oracle_id,
+            name = excluded.name,
+            printed_name = excluded.printed_name,
+            set_code = excluded.set_code,
+            collector_number = excluded.collector_number,
+            lang = excluded.lang,
+            layout = excluded.layout,
+            image_uris = excluded.image_uris,
+            art_crop_url = excluded.art_crop_url,
+            normal_image_url = excluded.normal_image_url,
+            usd_price = excluded.usd_price,
+            usd_foil_price = excluded.usd_foil_price
+            -- hash columns intentionally NOT updated
     """, batch_data)
     conn.commit()
 
@@ -296,6 +309,13 @@ def main():
     print("=" * 60)
     print("MTG Card Scanner - Memory-Safe Index Builder (English, Streamed)")
     print("=" * 60)
+
+    parser = argparse.ArgumentParser(description="Build/refresh the local SQLite card catalog")
+    parser.add_argument(
+        "--file", dest="file_path", default=None,
+        help="Path to a shared default-cards.json to reuse instead of downloading."
+    )
+    args = parser.parse_args()
 
     # Step 1: Get bulk data info from Scryfall
     update_build_step("fetch_metadata", "active", "Fetching Scryfall bulk data...")
@@ -312,20 +332,12 @@ def main():
     print(f"\nTotal cards in Scryfall: {total_cards_estimate}")
     update_build_step("fetch_metadata", "done", f"{total_cards_estimate} cards found")
 
-    # Step 2: Create/open database
-    # Don't force recreate — support resume by default
+    # Step 2: Create/open database (never force-recreate — preserves data)
     conn = create_database(force_recreate=False)
 
-    # Check what we already have (for resume support)
-    existing_ids = get_existing_ids(conn)
-    if existing_ids:
-        print(f"Existing cards in DB: {len(existing_ids)} — will skip duplicates (resume mode)")
-    else:
-        print("No existing cards found — starting fresh build")
-
-    # Step 3: Stream all cards from Scryfall, filter to English, insert in batches
+    # Step 3: Determine the source file. If --file was given, use it directly
+    # (shared download from refresh-data.sh). Otherwise download to the cache.
     processed = 0
-    skipped_existing = 0
     filtered_non_english = 0
     filtered_no_image = 0
     batch_buffer = []
@@ -335,30 +347,37 @@ def main():
     print(f"\nStreaming + processing cards (English only, batch size {BATCH_SIZE})...")
     print("-" * 60)
 
-    # Always download to local cache first (handles gzip decompression)
-    update_build_step("download", "active", "Downloading ~500 MB from Scryfall...")
-    update_build_status(0, total_cards_estimate, "Downloading bulk data...")
-    if BULK_FILE.exists() and (time.time() - BULK_FILE.stat().st_mtime) / 3600 < 24:
-        cached_size = BULK_FILE.stat().st_size // (1024 * 1024)
-        print(f"Using cached bulk data from {BULK_FILE}")
-        update_build_step("download", "done", f"{cached_size} MB cached, < 24h old")
+    if args.file_path:
+        source_file = Path(args.file_path)
+        if not source_file.exists():
+            print(f"ERROR: Shared file not found: {source_file}")
+            sys.exit(1)
+        print(f"Using shared bulk data file: {source_file}")
+        update_build_step("download", "done", f"shared file {source_file.name}")
     else:
-        download_bulk_file(bulk_url)
-        final_size = BULK_FILE.stat().st_size // (1024 * 1024)
-        update_build_step("download", "done", f"{final_size} MB downloaded")
+        source_file = BULK_FILE
+        update_build_step("download", "active", "Downloading ~500 MB from Scryfall...")
+        update_build_status(0, total_cards_estimate, "Downloading bulk data...")
+        if BULK_FILE.exists() and (time.time() - BULK_FILE.stat().st_mtime) / 3600 < 24:
+            cached_size = BULK_FILE.stat().st_size // (1024 * 1024)
+            print(f"Using cached bulk data from {BULK_FILE}")
+            update_build_step("download", "done", f"{cached_size} MB cached, < 24h old")
+        else:
+            download_bulk_file(bulk_url)
+            final_size = BULK_FILE.stat().st_size // (1024 * 1024)
+            update_build_step("download", "done", f"{final_size} MB downloaded")
 
-    update_build_step("filter", "active", f"Scanning {BULK_FILE.stat().st_size // (1024 * 1024)} MB for English cards...")
+    update_build_step("filter", "active", f"Scanning {source_file.stat().st_size // (1024 * 1024)} MB for English cards...")
     update_build_step("insert", "pending", "")
     update_build_step("finalize", "pending", "")
     update_build_status(0, total_cards_estimate, "Filtering English cards...")
 
-    filter_detail = ""
     insert_active = False
 
-    print(f"Streaming cards from local cache: {BULK_FILE}")
+    print(f"Streaming cards from: {source_file}")
 
     try:
-        for card in stream_cards_from_file(BULK_FILE):
+        for card in stream_cards_from_file(source_file):
             total_attempted += 1
 
             # Filter 1: Must have an image (no image = useless for scanning)
@@ -377,23 +396,17 @@ def main():
             if not insert_active:
                 update_build_step("filter", "done",
                     f"{filtered_non_english} non-English filtered, {filtered_no_image} no-image filtered")
-                update_build_step("insert", "active", "Starting batch inserts...")
+                update_build_step("insert", "active", "Starting batch upserts...")
                 insert_active = True
 
-            # Update progress every 2500 cards processed (regardless of skip/insert)
+            # Update progress every 2500 cards processed
             if total_attempted > 0 and total_attempted % 2500 == 0:
                 pct = round((total_attempted / max(total_cards_estimate, 1)) * 100, 1)
                 update_build_step("insert", "active",
-                    f"{total_english_found:,} English found, {processed:,} inserted, {skipped_existing:,} skipped, {filtered_non_english + filtered_no_image:,} filtered")
+                    f"{total_english_found:,} English found, {processed:,} upserted, {filtered_non_english + filtered_no_image:,} filtered")
                 update_build_status(total_attempted, total_cards_estimate,
-                    f"Scanned {total_attempted:,} cards ({pct}%) — {total_english_found:,} English, {processed:,} new, {skipped_existing:,} skipped")
-                print(f"  Scanned {total_attempted:,} total ({pct}%) — {total_english_found:,} English, {processed:,} new, {skipped_existing:,} skipped")
-
-            # Filter 3: Skip if already in database (resume mode)
-            card_id = card.get('id')
-            if card_id and card_id in existing_ids:
-                skipped_existing += 1
-                continue
+                    f"Scanned {total_attempted:,} cards ({pct}%) — {total_english_found:,} English, {processed:,} upserted")
+                print(f"  Scanned {total_attempted:,} total ({pct}%) — {total_english_found:,} English, {processed:,} upserted")
 
             # Add to batch buffer
             batch_buffer.append(card)
@@ -415,19 +428,32 @@ def main():
                             if card_data[0]:  # has id
                                 cursor = conn.cursor()
                                 cursor.execute("""
-                                INSERT OR REPLACE INTO cards 
+                                INSERT INTO cards 
                                 (id, oracle_id, name, printed_name, set_code, collector_number,
                                  lang, layout, image_uris, art_crop_url, normal_image_url,
                                  usd_price, usd_foil_price,
                                  full_card_phash, full_card_dhash, art_crop_phash, color_hash)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(id) DO UPDATE SET
+                                    oracle_id = excluded.oracle_id,
+                                    name = excluded.name,
+                                    printed_name = excluded.printed_name,
+                                    set_code = excluded.set_code,
+                                    collector_number = excluded.collector_number,
+                                    lang = excluded.lang,
+                                    layout = excluded.layout,
+                                    image_uris = excluded.image_uris,
+                                    art_crop_url = excluded.art_crop_url,
+                                    normal_image_url = excluded.normal_image_url,
+                                    usd_price = excluded.usd_price,
+                                    usd_foil_price = excluded.usd_foil_price
                                 """, card_data)
                                 conn.commit()
                                 successful += 1
                         except Exception:
                             pass  # skip problematic cards
                     processed += successful
-                    print(f"  Recovered: inserted {successful}/{len(batch_buffer)} cards individually")
+                    print(f"  Recovered: upserted {successful}/{len(batch_buffer)} cards individually")
 
                 batch_buffer = []
 
@@ -447,12 +473,25 @@ def main():
                         if card_data[0]:
                             cursor = conn.cursor()
                             cursor.execute("""
-                                INSERT OR REPLACE INTO cards 
+                                INSERT INTO cards 
                                 (id, oracle_id, name, printed_name, set_code, collector_number,
                                  lang, layout, image_uris, art_crop_url, normal_image_url,
                                  usd_price, usd_foil_price,
                                  full_card_phash, full_card_dhash, art_crop_phash, color_hash)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(id) DO UPDATE SET
+                                    oracle_id = excluded.oracle_id,
+                                    name = excluded.name,
+                                    printed_name = excluded.printed_name,
+                                    set_code = excluded.set_code,
+                                    collector_number = excluded.collector_number,
+                                    lang = excluded.lang,
+                                    layout = excluded.layout,
+                                    image_uris = excluded.image_uris,
+                                    art_crop_url = excluded.art_crop_url,
+                                    normal_image_url = excluded.normal_image_url,
+                                    usd_price = excluded.usd_price,
+                                    usd_foil_price = excluded.usd_foil_price
                             """, card_data)
                             conn.commit()
                             successful += 1
@@ -472,7 +511,7 @@ def main():
         sys.exit(1)
 
     # Mark insert as done and finalize
-    update_build_step("insert", "done", f"{processed} cards inserted into database")
+    update_build_step("insert", "done", f"{processed} cards upserted into database")
     update_build_step("finalize", "active", "Running final statistics...")
 
     # Print database stats
@@ -484,7 +523,6 @@ def main():
 
     update_build_step("finalize", "done",
         f"{total_count} total cards ({en_count} English), "
-        f"{skipped_existing} skipped (resume), "
         f"{filtered_non_english + filtered_no_image} filtered out")
 
     # Mark build as complete
@@ -496,8 +534,7 @@ def main():
     print(f"  Non-English filtered:  {filtered_non_english}")
     print(f"  No-image cards:        {filtered_no_image}")
     print(f"  Total English cards:   {total_english_found}")
-    print(f"  Skipped (existing DB): {skipped_existing}")
-    print(f"  Inserted this run:     {processed}")
+    print(f"  Upserted this run:     {processed}")
     print(f"  Database: {DB_PATH}")
 
     # Print database stats

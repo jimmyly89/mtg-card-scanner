@@ -61,15 +61,16 @@ function getHttpsCredentials() {
     return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
 }
 
-// Start HTTPS server (port 3443) with its own socket.io that forwards to HTTP io
+// Start HTTPS server (port HTTPS_PORT, default 3443) with its own socket.io
 function startHttpsServer(httpIo) {
     try {
         const credentials = getHttpsCredentials();
         const httpsServer = https.createServer(credentials, app);
         const httpsIo = socketIo(httpsServer);
+        const httpsPort = parseInt(process.env.HTTPS_PORT || '3443', 10);
         
-        httpsServer.listen(3443, '0.0.0.0', () => {
-            console.log(`HTTPS server running on https://0.0.0.0:3443 (for phone camera access)`);
+        httpsServer.listen(httpsPort, '0.0.0.0', () => {
+            console.log(`HTTPS server running on https://0.0.0.0:${httpsPort} (for phone camera access)`);
             console.log(`⚠️  Browsers will warn about self-signed cert — click "Advanced" → "Proceed"`);
         });
         
@@ -866,11 +867,17 @@ app.post('/api/mtg/scan-hash', upload.single('image'), async (req, res) => {
     }
 });
 
-// Helper function to run Python scripts
+// Helper function to run Python scripts.
+// Uses the configured virtual-environment interpreter (PYTHON_INTERPRETER),
+// falling back to python3. Never hardcodes a bare 'python'.
+function getPythonInterpreter() {
+    return process.env.PYTHON_INTERPRETER || 'python3';
+}
+
 function runPythonScript(scriptPath, args = []) {
     return new Promise((resolve, reject) => {
         const absoluteScriptPath = path.join(__dirname, scriptPath);
-        const python = spawn('python', [absoluteScriptPath, ...args]);
+        const python = spawn(getPythonInterpreter(), [absoluteScriptPath, ...args]);
         let stdout = '';
         let stderr = '';
 
@@ -1052,7 +1059,7 @@ app.post('/api/mtg/build-database', (req, res) => {
         
         console.log(`Spawning Python script: ${scriptFullPath}`);
         
-        const python = spawn('python', ['-u', 'db_builder.py'], {
+        const python = spawn(getPythonInterpreter(), ['-u', 'db_builder.py'], {
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
             cwd: path.join(__dirname, 'scripts')
@@ -1122,6 +1129,60 @@ function formatDuration(ms) {
 }
     
 const PORT = process.env.PORT || 3000;
+
+// ── Readiness endpoint ─────────────────────────────────────────────────────
+// Verifies real backend readiness (not just "server is up"): MariaDB
+// connectivity + local SQLite catalog availability. Used by install.sh,
+// update.sh and the systemd health checks.
+app.get('/api/health', async (req, res) => {
+    const result = {
+        status: 'ok',
+        db: 'ok',
+        catalog: 'ok',
+        catalog_cards: 0,
+        timestamp: new Date().toISOString()
+    };
+
+    // 1. MariaDB connectivity
+    try {
+        await db.query('SELECT 1');
+    } catch (err) {
+        result.status = 'degraded';
+        result.db = 'error';
+        result.db_error = err.message;
+    }
+
+    // 2. Local SQLite catalog
+    const dbPath = path.join(__dirname, 'data', 'mtg_cards.db');
+    if (!fs.existsSync(dbPath)) {
+        result.status = 'degraded';
+        result.catalog = 'missing';
+    } else {
+        try {
+            const sqlite3 = require('sqlite3');
+            const sdb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+            await new Promise((resolve, reject) => {
+                sdb.get('SELECT COUNT(*) AS cnt FROM cards', (err, row) => {
+                    sdb.close();
+                    if (err) return reject(err);
+                    result.catalog_cards = row ? row.cnt : 0;
+                    resolve();
+                });
+            });
+            if (result.catalog_cards === 0) {
+                result.status = 'degraded';
+                result.catalog = 'empty';
+            }
+        } catch (err) {
+            result.status = 'degraded';
+            result.catalog = 'error';
+            result.catalog_error = err.message;
+        }
+    }
+
+    const code = result.status === 'ok' ? 200 : 503;
+    res.status(code).json(result);
+});
 
 // Initialize database tables (non-blocking)
 db.initDatabase().then(() => {

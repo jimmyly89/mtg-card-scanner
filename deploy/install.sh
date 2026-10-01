@@ -102,6 +102,7 @@ apt-get update -y >> "${LOG_FILE}" 2>&1 || die "apt-get update failed"
 log "Installing system packages (git, curl, certs, openssl, python, cron, native libs)..."
 apt-get install -y --no-install-recommends \
     git curl ca-certificates gnupg openssl \
+    build-essential \
     python3 python3-pip python3-venv \
     cron logrotate \
     tesseract-ocr \

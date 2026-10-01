@@ -256,11 +256,10 @@ class CardDetector {
       };
     }
     
+    // Extract a proper 4-corner quad from the cluster's edge pixels
+    // (convex hull + Douglas-Peucker) instead of a naive bounding box.
+    const quad = this.extractQuadFromCluster(best);
     const { minX, minY, maxX, maxY } = best.bounds;
-    const quad = [
-      {x: minX, y: minY}, {x: maxX, y: minY},
-      {x: maxX, y: maxY}, {x: minX, y: maxY}
-    ];
     
     console.log(`BEST EDGE CLUSTER: score=${best.score.toFixed(2)}, bounds=(${minX},${minY}) to (${maxX},${maxY})`);
     
@@ -440,7 +439,9 @@ class CardDetector {
             
             const neighbors = [
               {x: cx-1, y: cy}, {x: cx+1, y: cy},
-              {x: cx, y: cy-1}, {x: cx, y: cy+1}
+              {x: cx, y: cy-1}, {x: cx, y: cy+1},
+              {x: cx-1, y: cy-1}, {x: cx+1, y: cy-1},
+              {x: cx-1, y: cy+1}, {x: cx+1, y: cy+1}
             ];
             
             for (const n of neighbors) {
@@ -467,6 +468,103 @@ class CardDetector {
     return clusters;
   }
   
+  // ── Polygon helpers (CollectorVision-style quad extraction) ──
+
+  // Andrew's monotone chain convex hull. Returns hull points in CCW order.
+  convexHull(points) {
+    const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+    if (pts.length <= 3) return pts;
+
+    const cross = (o, a, b) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+    const lower = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  }
+
+  // Douglas-Peucker simplification of a polygon to a fixed number of vertices.
+  simplifyPolygon(points, tolerance) {
+    if (points.length <= 4) return points;
+
+    const distToSegment = (p, a, b) => {
+      const abx = b.x - a.x, aby = b.y - a.y;
+      const apx = p.x - a.x, apy = p.y - a.y;
+      const len2 = abx * abx + aby * aby;
+      let t = len2 === 0 ? 0 : (apx * abx + apy * aby) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = a.x + t * abx, cy = a.y + t * aby;
+      return Math.hypot(p.x - cx, p.y - cy);
+    };
+
+    // Recursively simplify, then keep the 4 most significant vertices.
+    const simplify = (pts) => {
+      if (pts.length <= 2) return pts;
+      let maxDist = 0, index = 0;
+      for (let i = 1; i < pts.length - 1; i++) {
+        const d = distToSegment(pts[i], pts[0], pts[pts.length - 1]);
+        if (d > maxDist) { maxDist = d; index = i; }
+      }
+      if (maxDist > tolerance) {
+        const left = simplify(pts.slice(0, index + 1));
+        const right = simplify(pts.slice(index));
+        return left.slice(0, -1).concat(right);
+      }
+      return [pts[0], pts[pts.length - 1]];
+    };
+
+    const simplified = simplify(points);
+    if (simplified.length <= 4) return simplified;
+
+    // If still >4, keep the 4 vertices with the largest "corner" significance.
+    const scored = simplified.map((p, i) => {
+      const prev = simplified[(i - 1 + simplified.length) % simplified.length];
+      const next = simplified[(i + 1) % simplified.length];
+      const v1 = { x: p.x - prev.x, y: p.y - prev.y };
+      const v2 = { x: next.x - p.x, y: next.y - p.y };
+      const cross = Math.abs(v1.x * v2.y - v1.y * v2.x);
+      const dot = v1.x * v2.x + v1.y * v2.y;
+      const angleScore = cross / (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) + 1e-6);
+      return { p, score: angleScore * (1 - Math.abs(dot) / (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) + 1e-6)) };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 4).map(s => s.p);
+  }
+
+  // Extract a 4-corner quad from a cluster's edge pixels.
+  extractQuadFromCluster(cluster) {
+    const { pixels, bounds } = cluster;
+    const { minX, minY, maxX, maxY } = bounds;
+    const boxW = maxX - minX, boxH = maxY - minY;
+
+    // Use the convex hull of the edge pixels, then simplify to a quad.
+    const hull = this.convexHull(pixels);
+    const tolerance = Math.max(2, Math.min(boxW, boxH) * 0.02);
+    let quad = this.simplifyPolygon(hull, tolerance);
+
+    // Ensure exactly 4 points.
+    if (quad.length !== 4) {
+      // Fallback to bounding-box corners.
+      quad = [
+        { x: minX, y: minY }, { x: maxX, y: minY },
+        { x: maxX, y: maxY }, { x: minX, y: maxY }
+      ];
+    }
+
+    return this.orderQuadPoints(quad);
+  }
+
   scoreCluster(cluster, frameWidth, frameHeight) {
     const { bounds, pixelCount } = cluster;
     const { minX, minY, maxX, maxY } = bounds;
@@ -571,42 +669,101 @@ class CardDetector {
     return result;
   }
   
+  // ── Proper Canny edge detection (CollectorVision-style) ──
+  // 1. Gaussian blur to suppress noise
+  // 2. Sobel gradient magnitude + direction
+  // 3. Non-maximum suppression (thin edges to 1px)
+  // 4. Double-threshold hysteresis (strong/weak edge linking)
   detectEdges(gray, width, height) {
-    const edges = new Uint8Array(width * height);
-    const magnitudes = new Float32Array(width * height);
-    let maxMagnitude = 0;
-    
+    // Step 1: Gaussian blur (5x5, sigma ~1.4) to reduce noise
+    const blurred = this.gaussianBlur(gray, width, height, 2);
+
+    // Step 2: Sobel gradients
+    const gx = new Float32Array(width * height);
+    const gy = new Float32Array(width * height);
+    const mag = new Float32Array(width * height);
+    let maxMag = 0;
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
         const idx = y * width + x;
-        const gx = gray[idx + 1] - gray[idx - 1];
-        const gy = gray[idx + width] - gray[idx - width];
-        const magnitude = Math.sqrt(gx * gx + gy * gy);
-        magnitudes[idx] = magnitude;
-        if (magnitude > maxMagnitude) maxMagnitude = magnitude;
+        // 3x3 Sobel
+        gx[idx] =
+          -blurred[idx - width - 1] + blurred[idx - width + 1]
+          - 2 * blurred[idx - 1] + 2 * blurred[idx + 1]
+          - blurred[idx + width - 1] + blurred[idx + width + 1];
+        gy[idx] =
+          -blurred[idx - width - 1] - 2 * blurred[idx - width] - blurred[idx - width + 1]
+          + blurred[idx + width - 1] + 2 * blurred[idx + width] + blurred[idx + width + 1];
+        const m = Math.sqrt(gx[idx] * gx[idx] + gy[idx] * gy[idx]);
+        mag[idx] = m;
+        if (m > maxMag) maxMag = m;
       }
     }
-    
-    const sortedMags = Array.from(magnitudes).filter(m => m > 0).sort((a, b) => b - a);
-    const percentile85 = sortedMags[Math.floor(sortedMags.length * 0.15)] || 0;
-    const adaptiveThreshold = Math.max(20, percentile85);
-    
+
+    // Step 3: Non-maximum suppression — keep only local maxima along gradient dir
+    const nms = new Float32Array(width * height);
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        const m = mag[idx];
+        if (m === 0) continue;
+
+        // Quantize gradient direction to 0/45/90/135 degrees
+        const angle = Math.atan2(gy[idx], gx[idx]) * (180 / Math.PI);
+        let q = ((angle + 180) % 180);
+        q = q < 22.5 || q >= 157.5 ? 0 : q < 67.5 ? 45 : q < 112.5 ? 90 : 135;
+
+        let m1 = 0, m2 = 0;
+        if (q === 0)      { m1 = mag[idx - 1]; m2 = mag[idx + 1]; }
+        else if (q === 90){ m1 = mag[idx - width]; m2 = mag[idx + width]; }
+        else if (q === 45){ m1 = mag[idx - width - 1]; m2 = mag[idx + width + 1]; }
+        else              { m1 = mag[idx - width + 1]; m2 = mag[idx + width - 1]; }
+
+        if (m >= m1 && m >= m2) nms[idx] = m;
+      }
+    }
+
+    // Step 4: Adaptive thresholds from gradient histogram (like Canny's Otsu-ish)
+    const sorted = Array.from(nms).filter(m => m > 0).sort((a, b) => b - a);
+    const high = sorted.length ? Math.max(20, sorted[Math.floor(sorted.length * 0.10)]) : 20;
+    const low = high * 0.4;
+
+    // Step 5: Hysteresis — strong edges + weak edges connected to strong
+    const edges = new Uint8Array(width * height);
+    const strong = new Uint8Array(width * height);
+    for (let i = 0; i < nms.length; i++) {
+      if (nms[i] >= high) { edges[i] = 255; strong[i] = 1; }
+    }
+
+    // BFS/DFS from strong edges to link weak edges
+    const stack = [];
+    for (let i = 0; i < strong.length; i++) if (strong[i]) stack.push(i);
+    while (stack.length) {
+      const idx = stack.pop();
+      const x = idx % width, y = (idx / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          const nidx = ny * width + nx;
+          if (edges[nidx] === 0 && nms[nidx] >= low) {
+            edges[nidx] = 255;
+            stack.push(nidx);
+          }
+        }
+      }
+    }
+
     let edgePixelCount = 0;
-    for (let i = 0; i < magnitudes.length; i++) {
-      if (magnitudes[i] >= adaptiveThreshold) {
-        edges[i] = 255;
-        edgePixelCount++;
-      } else {
-        edges[i] = 0;
-      }
-    }
-    
-    this.lastDebugInfo.edgeMaxMagnitude = maxMagnitude;
-    this.lastDebugInfo.edgeThreshold = adaptiveThreshold;
+    for (let i = 0; i < edges.length; i++) if (edges[i]) edgePixelCount++;
+
+    this.lastDebugInfo.edgeMaxMagnitude = maxMag;
+    this.lastDebugInfo.edgeThreshold = high;
     this.lastDebugInfo.edgePixelCountInDetect = edgePixelCount;
-    
-    console.log(`Edge detection (adaptive): maxMag=${maxMagnitude.toFixed(2)}, threshold=${adaptiveThreshold.toFixed(2)}, pixels=${edgePixelCount}`);
-    
+
+    console.log(`Canny edges: maxMag=${maxMag.toFixed(2)}, high=${high.toFixed(2)}, low=${low.toFixed(2)}, pixels=${edgePixelCount}`);
+
     return edges;
   }
   
